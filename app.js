@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -19,161 +19,155 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- AUTH ---
-window.handleSignup = async () => {
-    const user = document.getElementById('username').value.toLowerCase().trim();
-    const pass = document.getElementById('password').value;
-    try {
-        const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
-        await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
-        await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid, status: "online" });
-    } catch (e) { alert(e.message); }
-};
-
-window.handleLogin = async () => {
-    const user = document.getElementById('username').value.toLowerCase().trim();
-    const pass = document.getElementById('password').value;
-    try { await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass); } catch (e) { alert(e.message); }
-};
-
+// --- AUTH & STATUS ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
-        await setDoc(doc(db, "users", user.uid), { status: "online" }, { merge: true });
+        await setDoc(doc(db, "users", user.uid), { status: "online", lastSeen: serverTimestamp() }, { merge: true });
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChatList();
     }
 });
 
-// --- CHANNEL LIST (Simplified for iPad) ---
+// --- UI HELPERS ---
+const toggleSidebar = () => {
+    document.getElementById('sidebar-left').classList.toggle('open');
+};
+
+// --- LEAVE GROUP ---
+window.leaveCurrentGroup = async () => {
+    if (!activeChatId || !confirm("Leave this group?")) return;
+    await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
+    location.reload(); 
+};
+
+// --- CHAT LIST ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
-    
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         list.innerHTML = "";
         let rooms = [];
         snap.forEach(d => rooms.push({ id: d.id, ...d.data() }));
-        
-        // Sort: Most recent message first
         rooms.sort((a,b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
 
         rooms.forEach(data => {
             const item = document.createElement('div');
             item.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
-            item.style.cursor = "pointer"; // Force iPad pointer
             item.innerHTML = `<span># ${data.name}</span>`;
-            
-            // Using a direct event listener for better iPad response
-            item.addEventListener('click', () => {
-                openChat(data.id, data.name);
-            });
-            
+            item.onclick = () => openChat(data.id, data.name);
             list.appendChild(item);
         });
     });
 }
 
-// --- MESSAGES & USERS ---
+// --- OPEN CHAT ---
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
+    document.getElementById('leave-btn-container').style.display = 'block';
     
-    // Clear view and close sidebar on mobile
-    const msgDiv = document.getElementById('messages');
-    msgDiv.innerHTML = "<p style='color:gray; padding:20px;'>Syncing...</p>";
-    if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
+    // AUTO-MINIMIZE SIDEBAR ON MOBILE
+    if (window.innerWidth <= 768) {
+        document.getElementById('sidebar-left').classList.remove('open');
+    }
 
-    // Messages
-    const msgQuery = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    onSnapshot(msgQuery, (snap) => {
+    // Messages with Live Status on Avatars
+    const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
+    onSnapshot(qMsg, (snap) => {
+        const msgDiv = document.getElementById('messages');
         msgDiv.innerHTML = "";
         snap.forEach(d => {
             const m = d.data();
             const isMine = m.senderId === currentUser.uid;
-            msgDiv.innerHTML += `
-                <div class="msg-bubble ${isMine ? 'mine' : ''}">
-                    <div class="avatar-box">
-                        <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img">
+            const time = m.timestamp ? new Date(m.timestamp.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "...";
+            
+            const msgRow = document.createElement('div');
+            msgRow.className = `msg-bubble ${isMine ? 'mine' : ''}`;
+            msgRow.innerHTML = `
+                <div class="avatar-box" id="msg-av-${d.id}">
+                    <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img">
+                    <div class="status-dot offline" id="dot-${d.id}-${m.senderId}"></div>
+                </div>
+                <div class="msg-content">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:3px;">
+                        <small style="font-weight:bold; font-size:11px;">@${m.senderName}</small>
+                        <small style="font-size:9px; opacity:0.5;">${time}</small>
                     </div>
-                    <div class="msg-content">
-                        <small style="font-weight:bold; display:block; font-size:10px; margin-bottom:2px;">@${m.senderName}</small>
-                        ${m.content}
-                    </div>
+                    ${m.content}
                 </div>`;
+            msgDiv.appendChild(msgRow);
+
+            // Sync the status dot on the message avatar
+            onSnapshot(doc(db, "users", m.senderId), (uSnap) => {
+                const u = uSnap.data();
+                const dot = document.getElementById(`dot-${d.id}-${m.senderId}`);
+                if (dot && u) {
+                    dot.className = `status-dot ${u.status === 'online' ? 'online' : 'offline'}`;
+                }
+            });
         });
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Online Members
+    // Right Sidebar Member List
     onSnapshot(doc(db, "conversations", id), (snap) => {
+        if (!snap.exists()) return;
         const members = snap.data().members;
         const memberList = document.getElementById('member-list');
         memberList.innerHTML = "";
-        
         members.forEach(uid => {
             onSnapshot(doc(db, "users", uid), (uSnap) => {
-                const u = uSnap.data();
-                if(!u) return;
-                const rowId = `row-${uid}`;
+                const u = uSnap.data(); if(!u) return;
+                const rowId = `mem-row-${uid}`;
                 if(document.getElementById(rowId)) document.getElementById(rowId).remove();
-
                 const row = document.createElement('div');
                 row.id = rowId;
-                row.style = "display:flex; align-items:center; margin-bottom:12px;";
+                row.className = "user-row";
                 row.innerHTML = `
-                    <div class="avatar-box" style="width:24px; height:24px; margin:0 10px 0 0;">
+                    <div class="avatar-box" style="width:24px; height:24px;">
                         <img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;">
                         <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
                     </div>
-                    <span style="font-size:13px; color:${u.status === 'online' ? '#fff' : '#888'}">${u.username}</span>
-                `;
+                    <span>${u.username}</span>`;
                 memberList.appendChild(row);
             });
         });
     });
 }
 
-// --- SENDING ---
+// --- GLOBAL EXPORTS ---
+window.handleSignup = async () => {
+    const user = document.getElementById('username').value.toLowerCase().trim();
+    const pass = document.getElementById('password').value;
+    const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
+    await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
+    await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid, status: "online" });
+};
+window.handleLogin = async () => {
+    const user = document.getElementById('username').value.toLowerCase().trim();
+    const pass = document.getElementById('password').value;
+    await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
+};
 window.sendMessage = async () => {
     const input = document.getElementById('msg-input');
     if (!activeChatId || !input.value.trim()) return;
     const content = input.value;
-    const senderName = auth.currentUser.email.split('@')[0];
     input.value = "";
-    
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content, senderId: currentUser.uid, senderName, timestamp: serverTimestamp()
+        content, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
     });
-    
-    await updateDoc(doc(db, "conversations", activeChatId), {
-        lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid
-    });
+    await updateDoc(doc(db, "conversations", activeChatId), { lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid });
 };
-
-// --- INVITES ---
 window.searchAndAdd = async () => {
     const target = document.getElementById('search-username').value.toLowerCase().trim();
-    if(!target) return;
     const snap = await getDoc(doc(db, "usernames", target));
-    if(snap.exists()){
-        const uid = snap.data().uid;
-        if(!selectedMembers.includes(uid)){
-            selectedMembers.push(uid);
-            alert(`@${target} added!`);
-            document.getElementById('search-username').value = "";
-        }
-    } else { alert("User not found"); }
+    if(snap.exists()) { selectedMembers.push(snap.data().uid); alert("Added!"); }
 };
-
 window.startGroupChat = async () => {
-    const name = document.getElementById('group-name').value.trim();
-    if(!name) return;
-    const docRef = await addDoc(collection(db, "conversations"), { 
-        name, members: [...selectedMembers, currentUser.uid], lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid 
-    });
-    selectedMembers = [];
-    document.getElementById('group-name').value = "";
+    const name = document.getElementById('group-name').value;
+    const docRef = await addDoc(collection(db, "conversations"), { name, members: [...selectedMembers, currentUser.uid], lastMessageAt: serverTimestamp() });
     openChat(docRef.id, name);
 };
+window.toggleSidebar = toggleSidebar;
