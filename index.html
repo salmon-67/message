@@ -3,105 +3,121 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Salmon</title>
+    <title>Salmon Chat</title>
     <style>
-        :root { --bg-darker: #1e1f22; --bg-sidebar: #2b2d31; --bg-main: #313338; --discord-blue: #5865f2; --discord-green: #23a55a; --discord-grey: #80848e; --text-main: #dbdee1; --text-muted: #949ba4; }
+        :root { --bg-darker: #1e1f22; --bg-sidebar: #2b2d31; --bg-main: #313338; --discord-blue: #5865f2; --discord-green: #23a55a; --discord-red: #da373c; --text-main: #dbdee1; --text-muted: #949ba4; }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { margin: 0; font-family: -apple-system, sans-serif; background: var(--bg-main); color: var(--text-main); display: flex; height: 100dvh; overflow: hidden; position: fixed; width: 100%; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg-main); color: var(--text-main); display: flex; height: 100dvh; overflow: hidden; position: fixed; width: 100%; }
         
-        #auth-container { margin: auto; background: var(--bg-sidebar); padding: 30px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; z-index: 1000; }
-        #auth-container input { width: 100%; margin-bottom: 10px; padding: 12px; background: var(--bg-darker); border: none; color: white; border-radius: 5px; font-size: 16px; }
-
+        /* LAYOUT */
         #app-container { display: none; width: 100%; height: 100%; }
+        #auth-container { margin: auto; background: var(--bg-sidebar); padding: 30px; border-radius: 12px; width: 90%; max-width: 400px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
         
-        /* Sidebar Navigation */
-        #sidebar-left { width: 260px; background: var(--bg-sidebar); border-right: 1px solid #1e1f22; display: flex; flex-direction: column; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 1000; }
-        
-        #main-chat { flex: 1; display: flex; flex-direction: column; position: relative; min-width: 0; background: var(--bg-main); }
-        
-        /* Responsive Mobile UI */
+        #sidebar-left { width: 260px; background: var(--bg-sidebar); display: flex; flex-direction: column; z-index: 100; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); border-right: 1px solid #1e1f22; }
+        #main-chat { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); position: relative; min-width: 0; }
+        #sidebar-right { width: 220px; background: var(--bg-sidebar); display: flex; flex-direction: column; border-left: 1px solid #1e1f22; padding: 15px; }
+
+        /* MOBILE OPTIMIZATION */
         @media (max-width: 768px) {
-            #sidebar-left { position: absolute; height: 100%; transform: translateX(-100%); width: 280px; box-shadow: 10px 0 15px rgba(0,0,0,0.3); }
+            #sidebar-left { position: absolute; height: 100%; transform: translateX(-100%); width: 280px; box-shadow: 10px 0 20px rgba(0,0,0,0.4); }
             #sidebar-left.open { transform: translateX(0); }
-            #sidebar-right { display: none !important; } /* Hide members on phone */
+            #sidebar-right { display: none !important; } 
         }
 
-        #messages { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 12px; -webkit-overflow-scrolling: touch; }
-        .msg-bubble { display: flex; align-items: flex-start; animation: fadeIn 0.2s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .mine { flex-direction: row-reverse; }
-        .msg-content { background: #383a40; padding: 10px; border-radius: 8px; max-width: 75%; position: relative; }
-        .mine .msg-content { background: var(--discord-blue); color: white; }
+        /* CHAT AREA */
+        .header-bar { height: 60px; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid #1e1f22; background: var(--bg-main); flex-shrink: 0; font-weight: bold; font-size: 16px; }
+        .menu-btn { background: none; border: none; color: white; font-size: 24px; margin-right: 10px; cursor: pointer; padding: 5px; }
 
-        /* Avatars & Status Dots */
-        .avatar-box { position: relative; width: 32px; height: 32px; margin: 0 10px; flex-shrink: 0; }
-        .avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
-        .status-dot { position: absolute; bottom: -2px; right: -2px; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg-sidebar); transition: background 0.3s; }
+        #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 4px; scroll-behavior: smooth; }
+        
+        .msg-container { display: flex; margin-bottom: 16px; animation: fadeIn 0.2s ease; }
+        .msg-container.mine { flex-direction: row-reverse; }
+        .msg-content { background: #383a40; padding: 10px 14px; border-radius: 8px; max-width: 80%; line-height: 1.4; word-wrap: break-word; }
+        .mine .msg-content { background: var(--discord-blue); color: white; }
+        
+        .system-msg { text-align: center; font-size: 12px; color: var(--text-muted); margin: 10px 0; display: flex; justify-content: center; }
+        .system-msg span { background: rgba(0,0,0,0.2); padding: 4px 12px; border-radius: 20px; }
+
+        /* INPUT AREA */
+        #input-area { padding: 15px; background: var(--bg-main); display: flex; gap: 10px; border-top: 1px solid #1e1f22; padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
+        #msg-input { flex: 1; background: var(--bg-darker); border: none; color: white; padding: 12px; border-radius: 8px; font-size: 16px; outline: none; }
+        
+        /* AVATARS & STATUS */
+        .avatar-box { width: 35px; height: 35px; border-radius: 50%; position: relative; margin: 0 10px; flex-shrink: 0; }
+        .avatar-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; background: #333; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg-sidebar); position: absolute; bottom: -2px; right: -2px; }
         .online { background: var(--discord-green); }
         .offline { background: var(--discord-grey); }
 
-        #sidebar-right { width: 220px; background: var(--bg-sidebar); padding: 15px; border-left: 1px solid #1e1f22; display: flex; flex-direction: column; }
-        #input-area { padding: 15px; display: flex; gap: 10px; border-top: 1px solid #1e1f22; background: var(--bg-main); padding-bottom: calc(15px + env(safe-area-inset-bottom)); }
-        #msg-input { flex: 1; background: var(--bg-darker); border: none; color: white; padding: 12px; border-radius: 8px; font-size: 16px; outline: none; }
+        /* UI COMPONENTS */
+        .chat-item { padding: 10px; margin: 4px 8px; border-radius: 4px; cursor: pointer; color: var(--text-muted); display: flex; align-items: center; transition: 0.2s; }
+        .chat-item:hover { background: #35373c; color: var(--text-main); }
+        .chat-item.active { background: #404249; color: white; font-weight: 500; }
         
-        .chat-item { padding: 12px; cursor: pointer; border-radius: 4px; margin: 2px 8px; color: var(--text-muted); transition: 0.2s; display: flex; align-items: center; }
-        .chat-item:active { background: #3f4147; }
-        .chat-item.active { background: #3f4147; color: white; font-weight: 500; }
-        
-        .header-bar { height: 60px; display: flex; align-items: center; padding: 0 15px; border-bottom: 1px solid #1e1f22; background: var(--bg-main); flex-shrink: 0; }
-        .menu-btn { background: none; border: none; color: white; font-size: 24px; padding: 10px; margin-left: -10px; cursor: pointer; }
+        input { background: var(--bg-darker); border: none; color: white; padding: 12px; border-radius: 4px; width: 100%; margin-bottom: 10px; }
+        button { cursor: pointer; border: none; font-weight: bold; }
+
+        /* TOAST & LOADER */
+        #toast-container { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); z-index: 2000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+        .toast { background: #1e1f22; color: white; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); opacity: 0; animation: slideUp 0.3s forwards; font-size: 14px; border-left: 4px solid var(--discord-blue); pointer-events: auto; }
+        .toast.error { border-left-color: var(--discord-red); }
+        @keyframes slideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+        .loader { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--discord-blue); border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; margin: auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
+    <div id="toast-container"></div>
+
     <div id="auth-container">
         <h1 style="color:white; margin-top:0;">Salmon</h1>
         <input type="text" id="username" placeholder="Username" autocomplete="off">
         <input type="password" id="password" placeholder="Password">
-        <button onclick="handleSignup()" style="width:100%; background:var(--discord-blue); color:white; padding:14px; border:none; border-radius:8px; font-weight:bold; margin-bottom:8px;">Join Salmon</button>
-        <button onclick="handleLogin()" style="width:100%; background:transparent; color:var(--text-muted); padding:10px; border:1px solid #4e5058; border-radius:8px;">Sign In</button>
+        <button onclick="handleSignup()" style="width:100%; background:var(--discord-blue); color:white; padding:12px; border-radius:4px; margin-bottom:10px;">Create Account</button>
+        <button onclick="handleLogin()" style="width:100%; background:#4e5058; color:white; padding:12px; border-radius:4px;">Log In</button>
     </div>
 
     <div id="app-container">
         <nav id="sidebar-left">
-            <div class="header-bar" style="justify-content: space-between; background: var(--bg-sidebar);">
-                <span style="font-weight:bold; letter-spacing: 1px;">CHANNELS</span>
-                <button onclick="toggleSidebar()" style="background:none; border:none; color:var(--text-muted); font-size:20px;">✕</button>
+            <div class="header-bar" style="justify-content:space-between; background:var(--bg-sidebar);">
+                <span>CHANNELS</span>
+                <button onclick="toggleSidebar()" style="background:none; border:none; color:white; font-size:20px;">✕</button>
             </div>
-            <div id="chat-list" style="flex:1; overflow-y:auto; padding-top:10px;"></div>
+            <div id="chat-list" style="flex:1; overflow-y:auto; padding:10px 0;"></div>
             
-            <div style="padding:15px; border-top:1px solid #1e1f22; background: rgba(0,0,0,0.1);">
-                <input type="text" id="search-username" placeholder="@invite user" style="width:100%; background:var(--bg-darker); border:none; color:white; padding:10px; border-radius:6px; margin-bottom:8px;">
-                <button onclick="searchAndAdd()" style="width:100%; background:#4e5058; color:white; border:none; padding:8px; border-radius:6px; font-size:12px; margin-bottom:15px;">Add to Invite List</button>
-                
-                <input type="text" id="group-name" placeholder="New Group Name" style="width:100%; background:var(--bg-darker); border:none; color:white; padding:10px; border-radius:6px; margin-bottom:8px;">
-                <button onclick="startGroupChat()" style="width:100%; background:var(--discord-green); color:white; border:none; padding:12px; border-radius:6px; font-weight:bold;">Create Channel</button>
+            <div style="padding:15px; background:rgba(0,0,0,0.2);">
+                <input type="text" id="search-username" placeholder="Search user (@name)">
+                <button onclick="searchAndAdd()" style="width:100%; background:#4e5058; color:white; padding:8px; border-radius:4px; margin-bottom:10px; font-size:12px;">Add to Invite List</button>
+                <input type="text" id="group-name" placeholder="New Channel Name">
+                <button onclick="startGroupChat()" style="width:100%; background:var(--discord-green); color:white; padding:10px; border-radius:4px;">Create Channel</button>
             </div>
         </nav>
 
         <main id="main-chat">
             <header class="header-bar">
                 <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-                <b id="current-chat-title" style="margin-left:5px;">Welcome</b>
+                <span id="current-chat-title">Welcome</span>
             </header>
             
             <div id="messages">
-                <div style="margin:auto; text-align:center; color:var(--text-muted);">
-                    <p>Select a channel to start chatting</p>
+                <div style="margin:auto; text-align:center; color:gray;">
+                    <p>Select a channel to start messaging.</p>
                 </div>
             </div>
 
             <div id="input-area">
-                <input type="text" id="msg-input" placeholder="Message..." autocomplete="off">
-                <button onclick="sendMessage()" style="background:var(--discord-blue); color:white; border:none; padding:0 20px; border-radius:8px; font-weight:bold;">Send</button>
+                <input type="text" id="msg-input" placeholder="Message #channel" autocomplete="off">
+                <button onclick="sendMessage()" style="background:none; color:var(--discord-blue); font-size:16px; padding:0 15px;">Send</button>
             </div>
         </main>
 
         <aside id="sidebar-right">
-            <div style="font-size:11px; color:var(--text-muted); font-weight:bold; margin-bottom:20px; letter-spacing:1px;">MEMBERS</div>
+            <div style="font-size:12px; font-weight:bold; color:var(--text-muted); margin-bottom:15px;">MEMBERS</div>
             <div id="member-list" style="flex:1; overflow-y:auto;"></div>
-            <div id="leave-btn-container" style="display:none; padding-top:20px; border-top:1px solid #1e1f22;">
-                <button onclick="leaveCurrentGroup()" style="width:100%; background:#da373c; color:white; border:none; padding:12px; border-radius:6px; font-weight:bold; cursor:pointer;">Leave Group</button>
+            <div id="leave-btn-container" style="display:none; padding-top:10px;">
+                <button onclick="leaveCurrentGroup()" style="width:100%; background:var(--discord-red); color:white; padding:10px; border-radius:4px;">Leave Channel</button>
             </div>
         </aside>
     </div>
