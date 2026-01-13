@@ -24,22 +24,22 @@ let isCreating = false;
 
 const emojiMap = { ":heart:": "❤️", ":fire:": "🔥", ":smile:": "😊", ":lol:": "😂", ":rocket:": "🚀" };
 
-// --- AUTH ---
+// --- AUTH LOGIC ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
-    if(!user || pass.length < 6) return alert("Username required & password must be 6+ chars");
+    if(!user || pass.length < 6) return alert("Min 6 chars for password");
 
     try {
         const nameCheck = await getDoc(doc(db, "usernames", user));
-        if (nameCheck.exists()) return alert("Username already taken!");
+        if (nameCheck.exists()) return alert("Username taken!");
 
         const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
-        // Wait for auth sync to avoid permission errors
+        // Delay to allow Firebase Auth to propagate
         setTimeout(async () => {
             await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
             await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid });
-            alert("Account created successfully!");
+            alert("Signed up!");
         }, 1000);
     } catch (e) { alert(e.message); }
 };
@@ -48,7 +48,7 @@ window.handleLogin = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
     try { await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass); } 
-    catch (e) { alert("Login failed. Check your details."); }
+    catch (e) { alert("Login failed"); }
 };
 
 onAuthStateChanged(auth, (user) => {
@@ -60,16 +60,14 @@ onAuthStateChanged(auth, (user) => {
     }
 });
 
-// --- GROUPS ---
+// --- GROUP LOGIC ---
 window.searchAndAdd = async () => {
     const input = document.getElementById('search-username');
     const target = input.value.toLowerCase().trim();
-    if (!target) return;
-
     const snap = await getDoc(doc(db, "usernames", target));
     if (snap.exists()) {
         const uid = snap.data().uid;
-        if (uid === currentUser.uid) return alert("You're already the owner!");
+        if (uid === currentUser.uid) return alert("You are you!");
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
             const tag = document.createElement('span');
@@ -82,7 +80,7 @@ window.searchAndAdd = async () => {
 
 window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
-    if (isCreating || !name || selectedMembers.length === 0) return alert("Room name and members required!");
+    if (isCreating || !name || selectedMembers.length === 0) return alert("Add a name and friends");
     
     isCreating = true;
     document.getElementById('create-btn').disabled = true;
@@ -93,7 +91,7 @@ window.startGroupChat = async () => {
     });
 
     await addDoc(collection(db, "conversations", docRef.id, "messages"), {
-        content: `Welcome to the "${name}" room!`, type: "system", timestamp: serverTimestamp()
+        content: `Room "${name}" created`, type: "system", timestamp: serverTimestamp()
     });
 
     selectedMembers = [];
@@ -104,23 +102,7 @@ window.startGroupChat = async () => {
     openChat(docRef.id, name);
 };
 
-window.leaveGroup = async () => {
-    if (!activeChatId || !confirm("Leave this room?")) return;
-    const chatRef = doc(db, "conversations", activeChatId);
-    const myName = auth.currentUser.email.split('@')[0];
-
-    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: `@${myName} left the chat`, type: "system", timestamp: serverTimestamp()
-    });
-
-    await updateDoc(chatRef, { members: arrayRemove(currentUser.uid) });
-    activeChatId = null;
-    document.getElementById('messages').innerHTML = "";
-    document.getElementById('current-chat-title').innerText = "Select a Chat";
-    document.getElementById('leave-btn').style.display = "none";
-};
-
-// --- CHAT & MEDIA ---
+// --- MESSAGING ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -128,7 +110,8 @@ function loadChatList() {
         list.innerHTML = "";
         snap.forEach(doc => {
             const btn = document.createElement('button');
-            btn.className = "chat-item"; btn.innerText = `# ${doc.data().name}`;
+            btn.className = "chat-item " + (activeChatId === doc.id ? "active" : "");
+            btn.innerText = "# " + doc.data().name;
             btn.onclick = () => openChat(doc.id, doc.data().name);
             list.appendChild(btn);
         });
@@ -158,11 +141,12 @@ function openChat(id, name) {
                     </div>`;
             }
         });
-        msgDiv.scrollTop = msgDiv.scrollHeight;
+        msgDiv.scrollTop = msgDiv.scrollHeight; // Auto-scroll to bottom
     });
 }
 
 function parseText(text) {
+    if(!text) return "";
     Object.keys(emojiMap).forEach(k => text = text.replace(new RegExp(k, 'g'), emojiMap[k]));
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" style="color: #00aff4;">${url}</a>`);
@@ -171,11 +155,16 @@ function parseText(text) {
 window.sendMessage = async () => {
     const input = document.getElementById('msg-input');
     if (!activeChatId || !input.value.trim()) return;
-    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: input.value, type: "text", senderId: currentUser.uid,
-        senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
-    });
-    input.value = "";
+    try {
+        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+            content: input.value, 
+            type: "text", 
+            senderId: currentUser.uid,
+            senderName: auth.currentUser.email.split('@')[0], 
+            timestamp: serverTimestamp()
+        });
+        input.value = "";
+    } catch(e) { alert("Permission error! Check Firestore Rules."); }
 };
 
 window.uploadImage = async (input) => {
@@ -190,4 +179,16 @@ window.uploadImage = async (input) => {
             senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
         });
     } catch (e) { alert("Upload failed"); }
+};
+
+window.leaveGroup = async () => {
+    if (!activeChatId || !confirm("Leave?")) return;
+    const chatRef = doc(db, "conversations", activeChatId);
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+        content: `@${auth.currentUser.email.split('@')[0]} left`, type: "system", timestamp: serverTimestamp()
+    });
+    await updateDoc(chatRef, { members: arrayRemove(currentUser.uid) });
+    activeChatId = null;
+    document.getElementById('messages').innerHTML = "";
+    document.getElementById('leave-btn').style.display = "none";
 };
