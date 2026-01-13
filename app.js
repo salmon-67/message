@@ -19,14 +19,17 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- STATUS SYSTEM ---
-const setStatus = async (status) => {
+// --- STATUS/PRESENCE ---
+const setPresence = async (status) => {
     if (currentUser) {
-        await setDoc(doc(db, "users", currentUser.uid), { status, lastSeen: serverTimestamp() }, { merge: true });
+        await setDoc(doc(db, "users", currentUser.uid), { 
+            status: status, 
+            lastSeen: serverTimestamp() 
+        }, { merge: true });
     }
 };
 
-// --- AUTH ---
+// --- AUTHENTICATION ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
@@ -46,14 +49,17 @@ window.handleLogin = async () => {
 onAuthStateChanged(auth, (user) => {
     if (user) {
         currentUser = user;
-        setStatus("online");
+        setPresence("online");
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChatList();
     }
 });
 
-// --- CHAT ACTIONS ---
+// Update status when closing app
+window.onbeforeunload = () => { setPresence("offline"); };
+
+// --- ROOMS & INVITES ---
 window.searchAndAdd = async () => {
     const target = document.getElementById('search-username').value.toLowerCase().trim();
     if (!target) return;
@@ -62,7 +68,7 @@ window.searchAndAdd = async () => {
         const uid = snap.data().uid;
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
-            alert(`Added @${target}`);
+            alert(`Added @${target} to invite list`);
             document.getElementById('search-username').value = "";
         }
     } else { alert("User not found"); }
@@ -80,57 +86,46 @@ window.startGroupChat = async () => {
     openChat(docRef.id, name);
 };
 
-// --- REAL-TIME CHANNELS ---
+// --- REAL-TIME LISTENERS ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         let chats = [];
         snap.forEach(d => chats.push({ id: d.id, ...d.data() }));
-        
-        // CLIENT-SIDE SORT: Most recent message first
         chats.sort((a, b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
 
         list.innerHTML = "";
-        chats.forEach(async (data) => {
+        chats.forEach(data => {
             const btn = document.createElement('div');
             btn.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
-            btn.innerHTML = `<span># ${data.name}</span><div class="unread-dot"></div>`;
+            btn.innerHTML = `<span># ${data.name}</span>`;
             btn.onclick = () => openChat(data.id, data.name);
             list.appendChild(btn);
-
-            // Logic for bolding unread chats
-            const sSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", data.id));
-            const lastRead = sSnap.exists() ? sSnap.data().at?.toMillis() : 0;
-            if ((data.lastMessageAt?.toMillis() || 0) > lastRead && data.lastMessageBy !== currentUser.uid) {
-                btn.classList.add('unread');
-            }
         });
     });
 }
 
-// --- OPEN CHAT & MESSAGES ---
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
     if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
     
-    // Mark as Read
-    await setDoc(doc(db, "users", currentUser.uid, "readStatus", id), { at: serverTimestamp() }, { merge: true });
-
-    // Listen for Messages
+    // 1. Listen for Messages
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     onSnapshot(qMsg, (snap) => {
         const msgDiv = document.getElementById('messages');
-        msgDiv.innerHTML = "";
+        msgDiv.innerHTML = ""; // Clear for fresh load
         snap.forEach(d => {
             const m = d.data();
             const isMine = m.senderId === currentUser.uid;
             msgDiv.innerHTML += `
                 <div class="msg-bubble ${isMine ? 'mine' : ''}">
-                    <div class="avatar-box"><img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img"></div>
+                    <div class="avatar-box">
+                        <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img">
+                    </div>
                     <div class="msg-content">
-                        <small style="font-weight:bold; font-size:11px; display:block; margin-bottom:2px;">@${m.senderName}</small>
+                        <small style="font-weight:bold; display:block; font-size:10px; margin-bottom:2px;">@${m.senderName}</small>
                         ${m.content}
                     </div>
                 </div>`;
@@ -138,7 +133,7 @@ async function openChat(id, name) {
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Listen for Online Members in this room
+    // 2. Listen for Online Users in this room
     onSnapshot(doc(db, "conversations", id), (snap) => {
         const members = snap.data().members;
         const memberList = document.getElementById('member-list');
@@ -149,14 +144,18 @@ async function openChat(id, name) {
                 if (!u) return;
                 const idStr = `mem-${uid}`;
                 if (document.getElementById(idStr)) document.getElementById(idStr).remove();
-                memberList.innerHTML += `
-                    <div class="user-row" id="${idStr}" style="display:flex; align-items:center; margin-bottom:10px;">
-                        <div class="avatar-box" style="width:20px; height:20px; margin-right:8px;">
-                            <img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;">
-                            <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
-                        </div>
-                        <span style="font-size:13px; color:${u.status === 'online' ? '#fff' : '#888'}">${u.username}</span>
-                    </div>`;
+                
+                const row = document.createElement('div');
+                row.id = idStr;
+                row.style = "display:flex; align-items:center; margin-bottom:10px;";
+                row.innerHTML = `
+                    <div class="avatar-box" style="width:20px; height:20px; margin-right:8px;">
+                        <img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;">
+                        <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
+                    </div>
+                    <span style="font-size:13px; color:${u.status === 'online' ? '#fff' : '#888'}">${u.username}</span>
+                `;
+                memberList.appendChild(row);
             });
         });
     });
