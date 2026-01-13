@@ -19,13 +19,14 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// Presence System
+// --- STATUS SYSTEM ---
 const setStatus = async (status) => {
-    if (auth.currentUser) {
-        await setDoc(doc(db, "users", auth.currentUser.uid), { status }, { merge: true });
+    if (currentUser) {
+        await setDoc(doc(db, "users", currentUser.uid), { status, lastSeen: serverTimestamp() }, { merge: true });
     }
 };
 
+// --- AUTH ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
@@ -52,8 +53,7 @@ onAuthStateChanged(auth, (user) => {
     }
 });
 
-window.addEventListener('beforeunload', () => setStatus("offline"));
-
+// --- CHAT ACTIONS ---
 window.searchAndAdd = async () => {
     const target = document.getElementById('search-username').value.toLowerCase().trim();
     if (!target) return;
@@ -62,7 +62,7 @@ window.searchAndAdd = async () => {
         const uid = snap.data().uid;
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
-            alert(`@${target} added to invite list!`);
+            alert(`Added @${target}`);
             document.getElementById('search-username').value = "";
         }
     } else { alert("User not found"); }
@@ -72,90 +72,90 @@ window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
     if (!name) return alert("Enter room name");
     const members = [...selectedMembers, currentUser.uid];
-    try {
-        const docRef = await addDoc(collection(db, "conversations"), { 
-            name, members, lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid 
-        });
-        selectedMembers = [];
-        document.getElementById('group-name').value = "";
-        openChat(docRef.id, name);
-    } catch (e) { console.error(e); }
+    const docRef = await addDoc(collection(db, "conversations"), { 
+        name, members, lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid 
+    });
+    selectedMembers = [];
+    document.getElementById('group-name').value = "";
+    openChat(docRef.id, name);
 };
 
+// --- REAL-TIME CHANNELS ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         let chats = [];
         snap.forEach(d => chats.push({ id: d.id, ...d.data() }));
+        
+        // CLIENT-SIDE SORT: Most recent message first
         chats.sort((a, b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
 
         list.innerHTML = "";
         chats.forEach(async (data) => {
-            const btn = document.createElement('button');
+            const btn = document.createElement('div');
             btn.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
             btn.innerHTML = `<span># ${data.name}</span><div class="unread-dot"></div>`;
             btn.onclick = () => openChat(data.id, data.name);
             list.appendChild(btn);
 
-            const statusSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", data.id));
-            const lastRead = statusSnap.exists() ? statusSnap.data().at?.toMillis() : 0;
-            const lastMsg = data.lastMessageAt?.toMillis() || 0;
-            if (lastMsg > lastRead && data.lastMessageBy !== currentUser.uid) {
+            // Logic for bolding unread chats
+            const sSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", data.id));
+            const lastRead = sSnap.exists() ? sSnap.data().at?.toMillis() : 0;
+            if ((data.lastMessageAt?.toMillis() || 0) > lastRead && data.lastMessageBy !== currentUser.uid) {
                 btn.classList.add('unread');
             }
         });
     });
 }
 
+// --- OPEN CHAT & MESSAGES ---
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
     if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
+    
+    // Mark as Read
     await setDoc(doc(db, "users", currentUser.uid, "readStatus", id), { at: serverTimestamp() }, { merge: true });
 
-    // Load Messages
+    // Listen for Messages
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     onSnapshot(qMsg, (snap) => {
         const msgDiv = document.getElementById('messages');
         msgDiv.innerHTML = "";
         snap.forEach(d => {
-            const data = d.data();
-            const isMine = data.senderId === currentUser.uid;
-            const time = data.timestamp ? data.timestamp.toDate().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "";
+            const m = d.data();
+            const isMine = m.senderId === currentUser.uid;
             msgDiv.innerHTML += `
                 <div class="msg-bubble ${isMine ? 'mine' : ''}">
-                    <div class="avatar-box"><img class="avatar-img" src="https://ui-avatars.com/api/?name=${data.senderName}&background=random"></div>
+                    <div class="avatar-box"><img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img"></div>
                     <div class="msg-content">
-                        <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom:4px;">
-                            <small style="font-weight:bold; font-size:11px;">@${data.senderName}</small>
-                            <span style="font-size:9px; opacity:0.5;">${time}</span>
-                        </div>
-                        ${data.content}
+                        <small style="font-weight:bold; font-size:11px; display:block; margin-bottom:2px;">@${m.senderName}</small>
+                        ${m.content}
                     </div>
                 </div>`;
         });
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Load Online Members
-    onSnapshot(doc(db, "conversations", id), (chatSnap) => {
-        const members = chatSnap.data().members;
-        const memberListDiv = document.getElementById('member-list');
-        memberListDiv.innerHTML = "";
-        members.forEach(mUid => {
-            onSnapshot(doc(db, "users", mUid), (uSnap) => {
-                const uData = uSnap.data();
-                if(!uData) return;
-                const memId = `mem-${mUid}`;
-                if (document.getElementById(memId)) document.getElementById(memId).remove();
-                memberListDiv.innerHTML += `
-                    <div class="user-row" id="${memId}" style="display:flex; align-items:center; margin-bottom:12px;">
-                        <div class="avatar-box" style="width:24px; height:24px; margin:0 10px 0 0;">
-                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${uData.username}&background=random">
-                            <div class="status-dot ${uData.status === 'online' ? 'online' : 'offline'}"></div>
+    // Listen for Online Members in this room
+    onSnapshot(doc(db, "conversations", id), (snap) => {
+        const members = snap.data().members;
+        const memberList = document.getElementById('member-list');
+        memberList.innerHTML = "";
+        members.forEach(uid => {
+            onSnapshot(doc(db, "users", uid), (uSnap) => {
+                const u = uSnap.data();
+                if (!u) return;
+                const idStr = `mem-${uid}`;
+                if (document.getElementById(idStr)) document.getElementById(idStr).remove();
+                memberList.innerHTML += `
+                    <div class="user-row" id="${idStr}" style="display:flex; align-items:center; margin-bottom:10px;">
+                        <div class="avatar-box" style="width:20px; height:20px; margin-right:8px;">
+                            <img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;">
+                            <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
                         </div>
-                        <span style="font-size:13px;">${uData.username}</span>
+                        <span style="font-size:13px; color:${u.status === 'online' ? '#fff' : '#888'}">${u.username}</span>
                     </div>`;
             });
         });
@@ -168,6 +168,7 @@ window.sendMessage = async () => {
     const content = input.value;
     const senderName = auth.currentUser.email.split('@')[0];
     input.value = "";
+    
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content, senderId: currentUser.uid, senderName, timestamp: serverTimestamp()
     });
