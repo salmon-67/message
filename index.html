@@ -18,13 +18,13 @@
 
         body {
             margin: 0; 
-            font-family: 'Segoe UI', sans-serif;
+            font-family: 'Segoe UI', Tahoma, sans-serif;
             background-color: var(--bg-main); 
             color: var(--text-main);
             display: flex; 
-            height: 100vh; /* Prevents page from being longer than screen */
+            height: 100vh; /* Strictly 100% of screen height */
             width: 100vw;
-            overflow: hidden; /* Stops the whole page from scrolling */
+            overflow: hidden; /* Prevents the whole page from scrolling */
         }
 
         /* Auth Screen */
@@ -42,7 +42,7 @@
         .chat-item:hover { background: #35373c; color: white; }
         .chat-item.active { background: #3f4147; color: white; }
 
-        /* Messages Area - FIXED SCROLLING */
+        /* Messages Area */
         #messages { 
             flex-grow: 1; 
             overflow-y: auto; 
@@ -56,18 +56,18 @@
         .system-msg { text-align: center; color: var(--text-muted); font-size: 11px; margin: 10px 0; font-style: italic; }
         .sender-name { font-size: 11px; color: #00aff4; font-weight: bold; display: block; margin-bottom: 4px; }
         
-        /* Chat Input */
+        /* Chat Input Area */
         #input-area { padding: 20px; display: flex; gap: 10px; background: var(--bg-main); border-top: 1px solid #3f4147; }
-        input { background: var(--bg-input); border: none; color: white; padding: 12px; border-radius: 4px; width: 100%; font-size: 14px; }
+        input { background: var(--bg-input); border: none; color: white; padding: 12px; border-radius: 4px; width: 100%; font-size: 14px; outline: none; }
         button { background: var(--discord-blue); color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; white-space: nowrap; }
-        button:hover { filter: brightness(1.2); }
+        button:hover { filter: brightness(1.1); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
 
         .user-tag { background: #4e5058; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-right: 5px; border: 1px solid var(--discord-blue); display: inline-block; margin-top: 5px;}
         img.chat-img { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
         
-        /* Scrollbar Styling */
+        /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #1e1f22; border-radius: 10px; }
     </style>
 </head>
@@ -83,15 +83,15 @@
 
     <div id="app-container">
         <div id="sidebar">
-            <div class="sidebar-section"><strong>Groups</strong></div>
+            <div class="sidebar-section"><strong>Channels</strong></div>
             <div id="chat-list"></div>
             
             <div class="sidebar-section">
-                <input type="text" id="search-username" placeholder="Add friend by username...">
+                <input type="text" id="search-username" placeholder="Find user...">
                 <div id="selected-users"></div>
-                <button onclick="searchAndAdd()" style="width: 100%; margin-top: 8px; font-size: 12px;">Add to List</button>
+                <button onclick="searchAndAdd()" style="width: 100%; margin-top: 8px; font-size: 12px;">Add User</button>
                 <input type="text" id="group-name" placeholder="Group Name..." style="margin-top: 10px;">
-                <button id="create-btn" onclick="startGroupChat()" style="width: 100%; background: var(--discord-green); margin-top: 5px;">Create Chat</button>
+                <button id="create-btn" onclick="startGroupChat()" style="width: 100%; background: var(--discord-green); margin-top: 5px;">Create Room</button>
             </div>
         </div>
 
@@ -106,7 +106,7 @@
             <div id="input-area">
                 <button onclick="document.getElementById('image-input').click()" style="background: #4e5058;">+</button>
                 <input type="file" id="image-input" accept="image/*" style="display:none" onchange="uploadImage(this)">
-                <input type="text" id="msg-input" placeholder="Message... (Try :heart: or links)">
+                <input type="text" id="msg-input" placeholder="Message... (use :heart: :fire: :rocket:)">
                 <button onclick="sendMessage()">Send</button>
             </div>
         </div>
