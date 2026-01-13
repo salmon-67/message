@@ -19,7 +19,18 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- CORE AUTH ---
+// --- CORE FUNCTIONS ---
+window.toggleSidebar = () => {
+    const sidebar = document.getElementById('sidebar-left');
+    sidebar.classList.toggle('open');
+};
+
+const closeSidebarOnMobile = () => {
+    if (window.innerWidth <= 768) {
+        document.getElementById('sidebar-left').classList.remove('open');
+    }
+};
+
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
@@ -30,20 +41,6 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR ACTIONS ---
-window.toggleSidebar = () => {
-    document.getElementById('sidebar-left').classList.toggle('open');
-};
-
-window.leaveCurrentGroup = async () => {
-    if (!activeChatId || !confirm("Leave this group?")) return;
-    try {
-        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
-        location.reload(); 
-    } catch(e) { alert(e.message); }
-};
-
-// --- CHANNELS ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -63,13 +60,13 @@ function loadChatList() {
     });
 }
 
-// --- MESSAGES ---
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
     document.getElementById('leave-btn-container').style.display = 'block';
     
-    if (window.innerWidth <= 768) document.getElementById('sidebar-left').classList.remove('open');
+    // AUTO-MINIMISE
+    closeSidebarOnMobile();
 
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     onSnapshot(qMsg, (snap) => {
@@ -96,7 +93,6 @@ async function openChat(id, name) {
                 </div>`;
             msgDiv.appendChild(msgRow);
 
-            // Real-time status on message avatar
             onSnapshot(doc(db, "users", m.senderId), (uSnap) => {
                 const u = uSnap.data();
                 const dot = document.getElementById(`dot-${d.id}`);
@@ -106,30 +102,23 @@ async function openChat(id, name) {
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Right Sidebar Members
     onSnapshot(doc(db, "conversations", id), (snap) => {
-        if (!snap.exists()) return;
-        const members = snap.data().members;
         const memberList = document.getElementById('member-list');
+        if (!snap.exists() || !memberList) return;
         memberList.innerHTML = "";
-        members.forEach(uid => {
+        snap.data().members.forEach(uid => {
             onSnapshot(doc(db, "users", uid), (uSnap) => {
                 const u = uSnap.data(); if(!u) return;
                 const row = document.createElement('div');
-                row.className = "user-row";
-                row.innerHTML = `
-                    <div class="avatar-box" style="width:24px; height:24px;">
-                        <img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;">
-                        <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
-                    </div>
-                    <span>${u.username}</span>`;
+                row.style = "display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:13px;";
+                row.innerHTML = `<div class="avatar-box" style="width:20px; height:20px; margin:0;"><img src="https://ui-avatars.com/api/?name=${u.username}" style="width:100%; border-radius:50%;"><div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div></div><span>${u.username}</span>`;
                 memberList.appendChild(row);
             });
         });
     });
 }
 
-// --- GLOBAL ATTACHMENTS ---
+// --- ACTIONS ---
 window.handleSignup = async () => {
     try {
         const uVal = document.getElementById('username').value.toLowerCase().trim();
@@ -170,5 +159,14 @@ window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value;
     if(!name) return;
     const docRef = await addDoc(collection(db, "conversations"), { name, members: [...selectedMembers, currentUser.uid], lastMessageAt: serverTimestamp() });
+    
+    // AUTO-MINIMISE ON CREATE
+    closeSidebarOnMobile();
     openChat(docRef.id, name);
+};
+
+window.leaveCurrentGroup = async () => {
+    if (!activeChatId || !confirm("Leave?")) return;
+    await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
+    location.reload();
 };
