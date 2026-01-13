@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -17,37 +17,26 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
-// Fix "Client is Offline" by forcing persistence check
-try {
-    enableIndexedDbPersistence(db);
-} catch (err) {
-    console.warn("Persistence failed", err.code);
-}
-
 let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
-let isCreating = false;
 
-const emojiMap = { ":heart:": "❤️", ":fire:": "🔥", ":smile:": "😊", ":lol:": "😂", ":rocket:": "🚀" };
+// --- STATUS TRACKING ---
+const setPresence = async (status) => {
+    if (!auth.currentUser) return;
+    await updateDoc(doc(db, "users", auth.currentUser.uid), { status: status });
+};
 
 // --- AUTH ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
-    if(!user || pass.length < 6) return alert("Min 6 characters for password");
-
     try {
-        const nameCheck = await getDoc(doc(db, "usernames", user));
-        if (nameCheck.exists()) return alert("Username taken!");
-
         const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
-        // Wait for auth to settle
-        setTimeout(async () => {
-            await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
-            await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid });
-            alert("Account Created!");
-        }, 1000);
+        await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
+        await setDoc(doc(db, "users", res.user.uid), { 
+            username: user, uid: res.user.uid, status: "online" 
+        });
     } catch (e) { alert(e.message); }
 };
 
@@ -55,66 +44,45 @@ window.handleLogin = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
     try { await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass); } 
-    catch (e) { alert("Login Error: " + e.message); }
+    catch (e) { alert("Error: " + e.message); }
 };
 
 onAuthStateChanged(auth, (user) => {
     if (user) {
         currentUser = user;
+        setPresence("online");
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChatList();
     }
 });
 
-// --- GROUPS ---
+// Update offline status when window closes
+window.addEventListener('beforeunload', () => setPresence("offline"));
+
+// --- GROUP & MEMBER LOGIC ---
 window.searchAndAdd = async () => {
-    const input = document.getElementById('search-username');
-    const target = input.value.toLowerCase().trim();
-    if(!target) return;
+    const target = document.getElementById('search-username').value.toLowerCase().trim();
     const snap = await getDoc(doc(db, "usernames", target));
     if (snap.exists()) {
         const uid = snap.data().uid;
-        if (uid === currentUser.uid) return alert("You are already the host");
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
-            const tag = document.createElement('span');
-            tag.className = 'user-tag'; tag.innerText = `@${target}`;
-            document.getElementById('selected-users').appendChild(tag);
-            input.value = "";
+            document.getElementById('selected-users').innerText += ` @${target}`;
         }
-    } else { alert("User not found"); }
+    }
 };
 
 window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
-    if (isCreating || !name || selectedMembers.length === 0) return alert("Need name & users");
-    
-    isCreating = true;
-    document.getElementById('create-btn').disabled = true;
-
     const members = [...selectedMembers, currentUser.uid];
-    try {
-        const docRef = await addDoc(collection(db, "conversations"), {
-            name: name, members: members, updatedAt: serverTimestamp()
-        });
-
-        await addDoc(collection(db, "conversations", docRef.id, "messages"), {
-            content: `Room Created`, type: "system", timestamp: serverTimestamp()
-        });
-
-        selectedMembers = [];
-        document.getElementById('selected-users').innerHTML = "";
-        document.getElementById('group-name').value = "";
-        openChat(docRef.id, name);
-    } catch (e) { console.error(e); }
-    finally {
-        isCreating = false;
-        document.getElementById('create-btn').disabled = false;
-    }
+    const docRef = await addDoc(collection(db, "conversations"), { name, members });
+    selectedMembers = [];
+    document.getElementById('selected-users').innerText = "";
+    openChat(docRef.id, name);
 };
 
-// --- CHAT ---
+// --- REAL-TIME CHAT & STATUS ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -122,7 +90,7 @@ function loadChatList() {
         list.innerHTML = "";
         snap.forEach(doc => {
             const btn = document.createElement('button');
-            btn.className = "chat-item " + (activeChatId === doc.id ? "active" : "");
+            btn.className = "chat-item";
             btn.innerText = "# " + doc.data().name;
             btn.onclick = () => openChat(doc.id, doc.data().name);
             list.appendChild(btn);
@@ -135,72 +103,77 @@ function openChat(id, name) {
     document.getElementById('current-chat-title').innerText = name;
     document.getElementById('leave-btn').style.display = "block";
     
-    const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    onSnapshot(q, (snap) => {
+    // 1. Listen for Messages
+    const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
+    onSnapshot(qMsg, (snap) => {
         const msgDiv = document.getElementById('messages');
         msgDiv.innerHTML = "";
         snap.forEach(d => {
             const data = d.data();
-            if (data.type === "system") {
-                msgDiv.innerHTML += `<div class="system-msg">${data.content}</div>`;
-            } else {
-                const isMine = data.senderId === currentUser.uid;
-                let body = data.type === "image" ? `<img class="chat-img" src="${data.content}">` : parseText(data.content);
-                msgDiv.innerHTML += `
-                    <div class="message ${isMine ? 'mine' : ''}">
-                        <span class="sender-name">@${data.senderName}</span>
-                        ${body}
-                    </div>`;
-            }
+            const isMine = data.senderId === currentUser.uid;
+            msgDiv.innerHTML += `
+                <div class="message-bubble ${isMine ? 'mine' : ''}">
+                    <div class="avatar-box">
+                        <img class="avatar-img" src="https://ui-avatars.com/api/?name=${data.senderName}&background=random">
+                    </div>
+                    <div class="msg-content">
+                        <small style="display:block; font-size:10px; opacity:0.7;">@${data.senderName}</small>
+                        ${data.type === "image" ? `<img src="${data.content}" style="max-width:200px; border-radius:5px;">` : data.content}
+                    </div>
+                </div>`;
         });
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
-}
 
-function parseText(text) {
-    if(!text) return "";
-    Object.keys(emojiMap).forEach(k => text = text.replace(new RegExp(k, 'g'), emojiMap[k]));
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" style="color: #00aff4;">${url}</a>`);
+    // 2. Listen for Member Status (Right Sidebar)
+    onSnapshot(doc(db, "conversations", id), async (chatSnap) => {
+        const members = chatSnap.data().members;
+        const memberListDiv = document.getElementById('member-list');
+        memberListDiv.innerHTML = "";
+        
+        members.forEach(mUid => {
+            onSnapshot(doc(db, "users", mUid), (uSnap) => {
+                const uData = uSnap.data();
+                const existing = document.getElementById(`mem-${mUid}`);
+                if (existing) existing.remove(); // Prevent duplicates on refresh
+
+                memberListDiv.innerHTML += `
+                    <div class="user-row" id="mem-${mUid}">
+                        <div class="avatar-box" style="width:24px; height:24px;">
+                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${uData.username}&background=random">
+                            <div class="status-dot ${uData.status === 'online' ? 'online' : 'offline'}" style="width:8px; height:8px;"></div>
+                        </div>
+                        <span style="font-size:13px; color:${uData.status === 'online' ? '#fff' : '#80848e'}">${uData.username}</span>
+                    </div>`;
+            });
+        });
+    });
 }
 
 window.sendMessage = async () => {
     const input = document.getElementById('msg-input');
     if (!activeChatId || !input.value.trim()) return;
-    try {
-        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-            content: input.value, 
-            type: "text", 
-            senderId: currentUser.uid,
-            senderName: auth.currentUser.email.split('@')[0], 
-            timestamp: serverTimestamp()
-        });
-        input.value = "";
-    } catch(e) { console.error(e); }
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+        content: input.value, type: "text", senderId: currentUser.uid,
+        senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
+    });
+    input.value = "";
 };
 
 window.uploadImage = async (input) => {
     if (!activeChatId || !input.files[0]) return;
     const file = input.files[0];
     const refImg = ref(storage, `chats/${activeChatId}/${Date.now()}_${file.name}`);
-    try {
-        const snap = await uploadBytes(refImg, file);
-        const url = await getDownloadURL(snap.ref);
-        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-            content: url, type: "image", senderId: currentUser.uid,
-            senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
-        });
-    } catch (e) { console.error(e); }
+    const snap = await uploadBytes(refImg, file);
+    const url = await getDownloadURL(snap.ref);
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+        content: url, type: "image", senderId: currentUser.uid,
+        senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
+    });
 };
 
 window.leaveGroup = async () => {
-    if (!activeChatId || !confirm("Leave?")) return;
     const chatRef = doc(db, "conversations", activeChatId);
-    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: `@${auth.currentUser.email.split('@')[0]} left`, type: "system", timestamp: serverTimestamp()
-    });
     await updateDoc(chatRef, { members: arrayRemove(currentUser.uid) });
-    activeChatId = null;
-    document.getElementById('messages').innerHTML = "";
-    document.getElementById('leave-btn').style.display = "none";
+    location.reload();
 };
