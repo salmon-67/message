@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Competitor</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="auth-container">
+        <h2>Login / Signup</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="handleSignup()">Sign Up</button>
+        <button onclick="handleLogin()">Login</button>
+    </div>
+
+    <div id="app-container" style="display:none;">
+        <div id="sidebar">
+            <h3>Groups & Friends</h3>
+            <div id="chat-list"></div>
+            <hr>
+            <input type="text" id="search-username" placeholder="Find user...">
+            <button onclick="searchAndAdd()">Add to Group</button>
+            <div id="selected-users"></div>
+            <input type="text" id="group-name" placeholder="Group Name (optional)">
+            <button onclick="startGroupChat()">Create Chat</button>
+        </div>
+
+        <div id="main-chat">
+            <h3 id="current-chat-title">Select a Chat</h3>
+            <div id="messages"></div>
+            <div id="input-area">
+                <input type="text" id="msg-input" placeholder="Type a message...">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
