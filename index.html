@@ -3,174 +3,94 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MessageSalmon | Chat</title>
+    <title>MessageSalmon | Pro</title>
     <style>
-        /* CSS STYLES - Discord Dark Theme */
+        :root {
+            --bg-main: #313338;
+            --bg-sidebar: #2b2d31;
+            --bg-input: #1e1f22;
+            --discord-blue: #5865f2;
+            --discord-green: #248046;
+            --discord-red: #da373c;
+            --text-main: #dbdee1;
+            --text-muted: #949ba4;
+        }
+
         body {
-            margin: 0;
-            font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-            background-color: #313338;
-            color: #dbdee1;
-            display: flex;
-            height: 100vh;
-            overflow: hidden;
+            margin: 0; font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-main); color: var(--text-main);
+            display: flex; height: 100vh; overflow: hidden;
         }
 
-        /* Auth Screen */
-        #auth-container {
-            margin: auto;
-            background: #2b2d31;
-            padding: 40px;
-            border-radius: 8px;
-            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
-            width: 300px;
-            text-align: center;
-        }
+        /* Auth */
+        #auth-container { margin: auto; background: var(--bg-sidebar); padding: 40px; border-radius: 8px; width: 320px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+        
+        /* Layout */
+        #app-container { display: none; width: 100%; height: 100%; }
+        #sidebar { width: 280px; background: var(--bg-sidebar); display: flex; flex-direction: column; border-right: 1px solid #1e1f22; }
+        #main-chat { flex-grow: 1; display: flex; flex-direction: column; }
 
-        /* App Layout */
-        #app-container {
-            display: none; /* Hidden until login */
-            width: 100%;
-            height: 100%;
-        }
-
-        #sidebar {
-            width: 260px;
-            background-color: #2b2d31;
-            display: flex;
-            flex-direction: column;
-            border-right: 1px solid #1e1f22;
-        }
-
-        #sidebar-header {
-            padding: 20px;
-            font-weight: bold;
-            border-bottom: 1px solid #1e1f22;
-        }
-
-        #chat-list {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 10px;
-        }
-
-        .chat-item {
-            width: 100%;
-            background: none;
-            border: none;
-            color: #949ba4;
-            padding: 10px;
-            text-align: left;
-            cursor: pointer;
-            border-radius: 4px;
-            margin-bottom: 2px;
-            font-size: 16px;
-        }
-
+        /* Sidebar UI */
+        .sidebar-section { padding: 15px; border-bottom: 1px solid #1e1f22; }
+        #chat-list { flex-grow: 1; overflow-y: auto; padding: 10px; }
+        .chat-item { width: 100%; background: none; border: none; color: var(--text-muted); padding: 10px; text-align: left; cursor: pointer; border-radius: 4px; margin-bottom: 2px; }
         .chat-item:hover { background: #35373c; color: white; }
         .chat-item.active { background: #3f4147; color: white; }
 
-        #main-chat {
-            flex-grow: 1;
-            display: flex;
-            flex-direction: column;
-        }
+        /* Messages */
+        #messages { flex-grow: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+        .message { background: #383a40; padding: 12px; border-radius: 8px; max-width: 75%; align-self: flex-start; position: relative; }
+        .message.mine { align-self: flex-end; background: var(--discord-blue); color: white; }
+        .system-msg { text-align: center; color: var(--text-muted); font-size: 12px; margin: 10px 0; font-style: italic; }
+        .sender-name { font-size: 11px; color: #00aff4; font-weight: bold; display: block; margin-bottom: 4px; }
+        
+        /* Input Area */
+        #input-area { padding: 20px; display: flex; gap: 10px; background: var(--bg-main); border-top: 1px solid #3f4147; }
+        input[type="text"], input[type="password"] { background: var(--bg-input); border: none; color: white; padding: 12px; border-radius: 4px; width: 100%; }
+        button { background: var(--discord-blue); color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; }
+        button:hover { filter: brightness(1.2); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        #messages {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .message {
-            background: #383a40;
-            padding: 12px;
-            border-radius: 8px;
-            max-width: 70%;
-            align-self: flex-start;
-        }
-
-        .message.mine {
-            align-self: flex-end;
-            background: #5865f2;
-            color: white;
-        }
-
-        .sender-name {
-            font-size: 0.8rem;
-            color: #00aff4;
-            margin-bottom: 4px;
-            display: block;
-        }
-
-        #input-area {
-            padding: 20px;
-            background: #313338;
-            display: flex;
-            gap: 10px;
-        }
-
-        /* Universal UI Elements */
-        input {
-            background: #1e1f22;
-            border: none;
-            color: white;
-            padding: 12px;
-            border-radius: 4px;
-            width: calc(100% - 24px);
-            margin-bottom: 10px;
-        }
-
-        button {
-            background: #5865f2;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-        }
-
-        button:hover { background: #4752c4; }
-
-        .search-box {
-            padding: 10px;
-            border-top: 1px solid #1e1f22;
-        }
+        .user-tag { background: #4e5058; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-right: 5px; border: 1px solid var(--discord-blue); }
+        img.chat-img { max-width: 300px; border-radius: 8px; margin-top: 8px; display: block; cursor: zoom-in; }
     </style>
 </head>
 <body>
 
     <div id="auth-container">
-        <h2 style="color: white;">MessageSalmon</h2>
+        <h1 style="color: white; margin-bottom: 20px;">MessageSalmon</h1>
         <input type="text" id="username" placeholder="Username">
         <input type="password" id="password" placeholder="Password">
-        <button onclick="handleSignup()" style="width: 100%; margin-bottom: 10px;">Register</button>
-        <button onclick="handleLogin()" style="width: 100%; background: #4e5058;">Login</button>
+        <button onclick="handleSignup()" style="width: 100%; margin-top: 15px;">Register</button>
+        <button onclick="handleLogin()" style="width: 100%; background: #4e5058; margin-top: 10px;">Login</button>
     </div>
 
     <div id="app-container">
         <div id="sidebar">
-            <div id="sidebar-header">Channels</div>
+            <div class="sidebar-section"><strong>Chats</strong></div>
             <div id="chat-list"></div>
             
-            <div class="search-box">
-                <input type="text" id="search-username" placeholder="Search username...">
-                <div id="selected-users" style="font-size: 12px; margin-bottom: 5px;"></div>
-                <button onclick="searchAndAdd()" style="width: 100%; font-size: 12px;">Add to Group</button>
-                <input type="text" id="group-name" placeholder="Group Name" style="margin-top: 10px;">
-                <button onclick="startGroupChat()" style="width: 100%; background: #248046;">Create Chat</button>
+            <div class="sidebar-section">
+                <input type="text" id="search-username" placeholder="Add user by username...">
+                <div id="selected-users" style="margin-top: 8px;"></div>
+                <button onclick="searchAndAdd()" style="width: 100%; margin-top: 8px; font-size: 12px;">Add to Group</button>
+                <input type="text" id="group-name" placeholder="Group Name..." style="margin-top: 10px;">
+                <button id="create-btn" onclick="startGroupChat()" style="width: 100%; background: var(--discord-green); margin-top: 5px;">Create Room</button>
             </div>
         </div>
 
         <div id="main-chat">
-            <div id="sidebar-header" id="current-chat-title">Select a Chat</div>
+            <div class="sidebar-section" style="display:flex; justify-content:space-between; align-items:center;">
+                <span id="current-chat-title">Select a Chat</span>
+                <button id="leave-btn" onclick="leaveGroup()" style="background: var(--discord-red); display:none; padding: 5px 10px; font-size: 12px;">Leave Chat</button>
+            </div>
+            
             <div id="messages"></div>
+
             <div id="input-area">
-                <input type="text" id="msg-input" placeholder="Type a message...">
+                <button onclick="document.getElementById('image-input').click()" style="background: #4e5058;">+</button>
+                <input type="file" id="image-input" accept="image/*" style="display:none" onchange="uploadImage(this)">
+                <input type="text" id="msg-input" placeholder="Message... (Try :heart: or links)">
                 <button onclick="sendMessage()">Send</button>
             </div>
         </div>
@@ -179,9 +99,9 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
-        // YOUR FIREBASE CONFIG
         const firebaseConfig = {
             apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
             authDomain: "message-salmon.firebaseapp.com",
@@ -194,34 +114,40 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
+        const storage = getStorage(app);
 
         let currentUser = null;
         let activeChatId = null;
         let selectedMembers = [];
+        let isCreating = false;
 
-        // --- AUTH FUNCTIONS ---
+        const emojiMap = { ":heart:": "❤️", ":fire:": "🔥", ":smile:": "😊", ":lol:": "😂", ":check:": "✅" };
+
+        // --- AUTH ---
         window.handleSignup = async () => {
             const user = document.getElementById('username').value.toLowerCase().trim();
             const pass = document.getElementById('password').value;
-            if(!user || !pass) return alert("Enter details");
-            
+            if(!user || pass.length < 6) return alert("Username required & password must be 6+ chars");
+
             try {
                 const nameCheck = await getDoc(doc(db, "usernames", user));
                 if (nameCheck.exists()) return alert("Username taken!");
 
-                const res = await createUserWithEmailAndPassword(auth, `${user}@message-salmon.com`, pass);
-                await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
-                await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid });
-                alert("Account created! You can now login.");
+                const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
+                // Permission fix: wait a split second for auth to sync
+                setTimeout(async () => {
+                    await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
+                    await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid });
+                    alert("Account Ready!");
+                }, 800);
             } catch (e) { alert(e.message); }
         };
 
         window.handleLogin = async () => {
             const user = document.getElementById('username').value.toLowerCase().trim();
             const pass = document.getElementById('password').value;
-            try {
-                await signInWithEmailAndPassword(auth, `${user}@message-salmon.com`, pass);
-            } catch (e) { alert("Login failed!"); }
+            try { await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass); } 
+            catch (e) { alert("Invalid Login"); }
         };
 
         onAuthStateChanged(auth, (user) => {
@@ -233,32 +159,67 @@
             }
         });
 
-        // --- CHAT SYSTEM ---
+        // --- CHAT GROUPS ---
         window.searchAndAdd = async () => {
-            const target = document.getElementById('search-username').value.toLowerCase().trim();
+            const input = document.getElementById('search-username');
+            const target = input.value.toLowerCase().trim();
             const snap = await getDoc(doc(db, "usernames", target));
+            
             if (snap.exists()) {
                 const uid = snap.data().uid;
-                if (!selectedMembers.includes(uid)) {
+                if (!selectedMembers.includes(uid) && uid !== currentUser.uid) {
                     selectedMembers.push(uid);
-                    document.getElementById('selected-users').innerHTML += `@${target} `;
+                    const tag = document.createElement('span');
+                    tag.className = 'user-tag'; tag.innerText = `@${target}`;
+                    document.getElementById('selected-users').appendChild(tag);
+                    input.value = "";
                 }
             } else { alert("User not found"); }
         };
 
         window.startGroupChat = async () => {
-            const name = document.getElementById('group-name').value || "New Chat";
+            const name = document.getElementById('group-name').value.trim();
+            if (isCreating || !name || selectedMembers.length === 0) return alert("Need name and members!");
+            
+            isCreating = true;
+            document.getElementById('create-btn').disabled = true;
+
             const members = [...selectedMembers, currentUser.uid];
             const docRef = await addDoc(collection(db, "conversations"), {
-                name: name,
-                members: members,
-                updatedAt: serverTimestamp()
+                name: name, members: members, updatedAt: serverTimestamp()
             });
+
+            // System Message: Room Created
+            await addDoc(collection(db, "conversations", docRef.id, "messages"), {
+                content: `Room "${name}" created by @${auth.currentUser.email.split('@')[0]}`,
+                type: "system", timestamp: serverTimestamp()
+            });
+
             selectedMembers = [];
             document.getElementById('selected-users').innerHTML = "";
+            document.getElementById('group-name').value = "";
+            isCreating = false;
+            document.getElementById('create-btn').disabled = false;
             openChat(docRef.id, name);
         };
 
+        window.leaveGroup = async () => {
+            if (!activeChatId || !confirm("Leave this chat?")) return;
+            const chatRef = doc(db, "conversations", activeChatId);
+            
+            await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+                content: `@${auth.currentUser.email.split('@')[0]} left the room`,
+                type: "system", timestamp: serverTimestamp()
+            });
+
+            await updateDoc(chatRef, { members: arrayRemove(currentUser.uid) });
+            activeChatId = null;
+            document.getElementById('messages').innerHTML = "";
+            document.getElementById('current-chat-title').innerText = "Select a Chat";
+            document.getElementById('leave-btn').style.display = "none";
+        };
+
+        // --- MESSAGING ---
         function loadChatList() {
             const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
             onSnapshot(q, (snap) => {
@@ -266,8 +227,7 @@
                 list.innerHTML = "";
                 snap.forEach(doc => {
                     const btn = document.createElement('button');
-                    btn.className = "chat-item";
-                    btn.innerText = `# ${doc.data().name}`;
+                    btn.className = "chat-item"; btn.innerText = `# ${doc.data().name}`;
                     btn.onclick = () => openChat(doc.id, doc.data().name);
                     list.appendChild(btn);
                 });
@@ -276,36 +236,61 @@
 
         function openChat(id, name) {
             activeChatId = id;
-            document.getElementById('messages').innerHTML = "Loading...";
-            const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
+            document.getElementById('current-chat-title').innerText = name;
+            document.getElementById('leave-btn').style.display = "block";
             
+            const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
             onSnapshot(q, (snap) => {
                 const msgDiv = document.getElementById('messages');
                 msgDiv.innerHTML = "";
-                snap.forEach(doc => {
-                    const data = doc.data();
-                    const isMine = data.senderId === currentUser.uid;
-                    msgDiv.innerHTML += `
-                        <div class="message ${isMine ? 'mine' : ''}">
-                            <span class="sender-name">@${data.senderName}</span>
-                            ${data.text}
-                        </div>`;
+                snap.forEach(d => {
+                    const data = d.data();
+                    if (data.type === "system") {
+                        msgDiv.innerHTML += `<div class="system-msg">${data.content}</div>`;
+                    } else {
+                        const isMine = data.senderId === currentUser.uid;
+                        let content = data.type === "image" ? `<img class="chat-img" src="${data.content}">` : parseText(data.content);
+                        msgDiv.innerHTML += `
+                            <div class="message ${isMine ? 'mine' : ''}">
+                                <span class="sender-name">@${data.senderName}</span>
+                                ${content}
+                            </div>`;
+                    }
                 });
                 msgDiv.scrollTop = msgDiv.scrollHeight;
             });
         }
 
+        function parseText(text) {
+            // Emojis
+            Object.keys(emojiMap).forEach(k => text = text.replace(new RegExp(k, 'g'), emojiMap[k]));
+            // Links
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" style="color: #00aff4;">${url}</a>`);
+        }
+
         window.sendMessage = async () => {
             const input = document.getElementById('msg-input');
-            if (!activeChatId || !input.value) return;
-            
+            if (!activeChatId || !input.value.trim()) return;
             await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-                text: input.value,
-                senderId: currentUser.uid,
-                senderName: auth.currentUser.email.split('@')[0],
-                timestamp: serverTimestamp()
+                content: input.value, type: "text", senderId: currentUser.uid,
+                senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
             });
             input.value = "";
+        };
+
+        window.uploadImage = async (input) => {
+            if (!activeChatId || !input.files[0]) return;
+            const file = input.files[0];
+            const refImg = ref(storage, `chats/${activeChatId}/${Date.now()}_${file.name}`);
+            try {
+                const snap = await uploadBytes(refImg, file);
+                const url = await getDownloadURL(snap.ref);
+                await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+                    content: url, type: "image", senderId: currentUser.uid,
+                    senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
+                });
+            } catch (e) { alert("Upload failed"); }
         };
     </script>
 </body>
