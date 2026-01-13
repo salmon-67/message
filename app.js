@@ -1,7 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -15,18 +14,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const storage = getStorage(app);
 
 let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- STATUS ---
 const setPresence = async (status) => {
     if (auth.currentUser) await setDoc(doc(db, "users", auth.currentUser.uid), { status }, { merge: true });
 };
 
-// --- AUTH ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
@@ -55,28 +51,27 @@ onAuthStateChanged(auth, (user) => {
 
 window.addEventListener('beforeunload', () => setPresence("offline"));
 
-// --- GROUP LOGIC ---
 window.searchAndAdd = async () => {
     const target = document.getElementById('search-username').value.toLowerCase().trim();
     const snap = await getDoc(doc(db, "usernames", target));
     if (snap.exists() && !selectedMembers.includes(snap.data().uid)) {
         selectedMembers.push(snap.data().uid);
-        alert(`Added ${target}`);
-    }
+        alert(`Added ${target} to the list!`);
+    } else { alert("User not found or already added."); }
 };
 
 window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
+    if(!name || selectedMembers.length === 0) return alert("Room name and members required!");
     const members = [...selectedMembers, currentUser.uid];
     const docRef = await addDoc(collection(db, "conversations"), { name, members });
     await addDoc(collection(db, "conversations", docRef.id, "messages"), {
-        content: `--- ${name} group created ---`, type: "system", timestamp: serverTimestamp()
+        content: `--- ${name} created ---`, type: "system", timestamp: serverTimestamp()
     });
     selectedMembers = [];
     openChat(docRef.id, name);
 };
 
-// --- REAL-TIME CHAT ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -96,7 +91,7 @@ function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
     
-    // Message Listener
+    // Messages
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     onSnapshot(qMsg, (snap) => {
         const msgDiv = document.getElementById('messages');
@@ -107,15 +102,15 @@ function openChat(id, name) {
                 msgDiv.innerHTML += `<div class="system-msg">${data.content}</div>`;
             } else {
                 const isMine = data.senderId === currentUser.uid;
-                const senderName = data.senderName || "Unknown"; // Fixes undefined
+                const senderName = data.senderName || "Unknown";
                 msgDiv.innerHTML += `
                     <div class="message-bubble ${isMine ? 'mine' : ''}">
                         <div class="avatar-box">
-                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${senderName}">
+                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${senderName}&background=random">
                         </div>
                         <div class="msg-content">
                             <small style="display:block; font-size:10px; opacity:0.7;">@${senderName}</small>
-                            ${data.type === "image" ? `<img src="${data.content}" style="max-width:200px; display:block; margin-top:5px;">` : (data.content || "")}
+                            ${data.content || ""}
                         </div>
                     </div>`;
             }
@@ -123,7 +118,7 @@ function openChat(id, name) {
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Member Online Listener
+    // Sidebar Status
     onSnapshot(doc(db, "conversations", id), (chatSnap) => {
         const members = chatSnap.data().members;
         const memberListDiv = document.getElementById('member-list');
@@ -132,13 +127,13 @@ function openChat(id, name) {
             onSnapshot(doc(db, "users", mUid), (uSnap) => {
                 if (!uSnap.exists()) return;
                 const uData = uSnap.data();
-                const id = `mem-${mUid}`;
-                if (document.getElementById(id)) document.getElementById(id).remove();
+                const memId = `mem-${mUid}`;
+                if (document.getElementById(memId)) document.getElementById(memId).remove();
                 
                 memberListDiv.innerHTML += `
-                    <div class="user-row" id="${id}" style="display:flex; align-items:center; margin-bottom:10px;">
+                    <div class="user-row" id="${memId}" style="display:flex; align-items:center; margin-bottom:10px;">
                         <div class="avatar-box" style="width:24px; height:24px; margin:0 8px 0 0;">
-                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${uData.username}">
+                            <img class="avatar-img" src="https://ui-avatars.com/api/?name=${uData.username}&background=random">
                             <div class="status-dot ${uData.status === 'online' ? 'online' : 'offline'}"></div>
                         </div>
                         <span style="font-size:13px;">${uData.username}</span>
@@ -157,17 +152,4 @@ window.sendMessage = async () => {
         senderName: senderName, timestamp: serverTimestamp()
     });
     input.value = "";
-};
-
-window.uploadImage = async (input) => {
-    if (!activeChatId || !input.files[0]) return;
-    const file = input.files[0];
-    const senderName = auth.currentUser.email.split('@')[0];
-    const refImg = ref(storage, `chats/${activeChatId}/${Date.now()}_${file.name}`);
-    const snap = await uploadBytes(refImg, file);
-    const url = await getDownloadURL(snap.ref);
-    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: url, type: "image", senderId: currentUser.uid,
-        senderName: senderName, timestamp: serverTimestamp()
-    });
 };
