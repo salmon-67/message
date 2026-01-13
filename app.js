@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove, arrayUnion } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -17,38 +17,34 @@ const db = getFirestore(app);
 
 let currentUser = null;
 let activeChatId = null;
-let selectedMembers = [];
 let activeListeners = [];
 
-// --- HELPER: TOAST NOTIFICATIONS ---
-function showToast(msg, isError = false) {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${isError ? 'error' : ''}`;
-    toast.innerText = msg;
-    container.appendChild(toast);
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
-
-// --- HELPER: CLEANUP LISTENERS ---
-const stopListeners = () => {
-    activeListeners.forEach(unsub => unsub());
-    activeListeners = [];
+// --- HELPERS ---
+const stopListeners = () => { activeListeners.forEach(u => u()); activeListeners = []; };
+const showToast = (msg) => {
+    const c = document.getElementById('toast-container');
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.innerText = msg;
+    c.appendChild(t);
+    setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3000);
 };
+
+const msgDiv = document.getElementById('messages');
+const jumpBtn = document.getElementById('jump-btn');
+msgDiv.addEventListener('scroll', () => {
+    const isAtBottom = msgDiv.scrollHeight - msgDiv.scrollTop - msgDiv.clientHeight < 100;
+    jumpBtn.style.display = isAtBottom ? 'none' : 'block';
+});
+window.scrollToBottom = () => { msgDiv.scrollTop = msgDiv.scrollHeight; };
 
 // --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
-        // Set Online
         await setDoc(doc(db, "users", user.uid), { status: "online", lastSeen: serverTimestamp() }, { merge: true });
-        
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
-        showToast(`Welcome back, ${user.email.split('@')[0]}!`);
         loadChatList();
     } else {
         document.getElementById('auth-container').style.display = 'block';
@@ -56,71 +52,49 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// Set offline on close
-window.addEventListener('beforeunload', () => {
-    if (currentUser) setDoc(doc(db, "users", currentUser.uid), { status: "offline" }, { merge: true });
-});
-
-// --- CHAT LIST ---
+// --- LOAD CHANNELS ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         list.innerHTML = "";
-        let rooms = [];
-        snap.forEach(d => rooms.push({ id: d.id, ...d.data() }));
-        rooms.sort((a,b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
-
-        if (rooms.length === 0) list.innerHTML = "<div style='padding:20px; text-align:center; font-size:12px; color:gray'>No channels yet. Create one!</div>";
-
-        rooms.forEach(data => {
+        snap.forEach(d => {
+            const data = d.data();
             const item = document.createElement('div');
-            item.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
+            item.className = `chat-item ${activeChatId === d.id ? 'active' : ''}`;
             item.innerHTML = `<span># ${data.name}</span>`;
-            item.onclick = () => openChat(data.id, data.name);
+            item.onclick = () => openChat(d.id, data.name);
             list.appendChild(item);
         });
     });
 }
 
-// --- OPEN CHAT (The Core Logic) ---
+// --- OPEN CHAT ---
 async function openChat(id, name) {
-    if (activeChatId === id) {
-        if (window.innerWidth <= 768) document.getElementById('sidebar-left').classList.remove('open');
-        return;
-    }
-    
+    if (activeChatId === id && msgDiv.innerHTML !== "") return;
     activeChatId = id;
     stopListeners();
-    
     document.getElementById('current-chat-title').innerText = `# ${name}`;
     document.getElementById('leave-btn-container').style.display = 'block';
-    
-    const msgDiv = document.getElementById('messages');
-    msgDiv.innerHTML = '<div class="loader" style="margin-top:50px;"></div>'; // Loading Spinner
+    msgDiv.innerHTML = "";
 
     if (window.innerWidth <= 768) document.getElementById('sidebar-left').classList.remove('open');
 
-    // 1. MESSAGES LISTENER
-    let isFirstLoad = true;
+    // 1. Messages Listener
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    
     const unsubMsg = onSnapshot(qMsg, (snap) => {
-        if(isFirstLoad) { msgDiv.innerHTML = ""; isFirstLoad = false; }
-        
         snap.docChanges().forEach((change) => {
             if (change.type === "added") {
                 const m = change.doc.data();
-                const mId = change.doc.id;
-                
-                if (document.getElementById(`msg-${mId}`)) return; // Duplicate Guard
+                if (!m || !m.content || m.content === "undefined") return; // Filter undefined
+                if (document.getElementById(`msg-${change.doc.id}`)) return;
 
                 const isMine = m.senderId === currentUser.uid;
-                const isSystem = !m.senderName || m.type === 'system';
+                const isSystem = m.type === 'system' || !m.senderName;
                 const time = m.timestamp ? new Date(m.timestamp.toDate()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "";
 
                 const msgEl = document.createElement('div');
-                msgEl.id = `msg-${mId}`;
+                msgEl.id = `msg-${change.doc.id}`;
 
                 if (isSystem) {
                     msgEl.className = "system-msg";
@@ -130,49 +104,39 @@ async function openChat(id, name) {
                     msgEl.innerHTML = `
                         <div class="avatar-box">
                             <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img">
-                            <div class="status-dot offline" id="dot-${mId}"></div>
+                            <div class="status-dot offline" id="dot-${change.doc.id}"></div>
                         </div>
                         <div class="msg-content">
-                            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:4px; font-size:12px;">
-                                <strong style="margin-right:8px; cursor:pointer;">${m.senderName}</strong>
-                                <span style="opacity:0.5; font-size:10px;">${time}</span>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:11px;">
+                                <strong>${m.senderName}</strong> <span style="opacity:0.5;">${time}</span>
                             </div>
                             <div>${m.content}</div>
                         </div>`;
                     
-                    // Listener for this specific avatar status
                     const unsubStat = onSnapshot(doc(db, "users", m.senderId), (uSnap) => {
-                        const dot = document.getElementById(`dot-${mId}`);
+                        const dot = document.getElementById(`dot-${change.doc.id}`);
                         if(dot && uSnap.exists()) dot.className = `status-dot ${uSnap.data().status === 'online' ? 'online' : 'offline'}`;
                     });
                     activeListeners.push(unsubStat);
                 }
                 
-                // Smart Scroll: Only scroll if user is near bottom or it's their message
-                const isNearBottom = msgDiv.scrollHeight - msgDiv.scrollTop - msgDiv.clientHeight < 100;
+                const isNearBottom = msgDiv.scrollHeight - msgDiv.scrollTop - msgDiv.clientHeight < 150;
                 msgDiv.appendChild(msgEl);
-                if (isNearBottom || isMine) msgDiv.scrollTop = msgDiv.scrollHeight;
+                if (isNearBottom || isMine) window.scrollToBottom();
             }
         });
     });
     activeListeners.push(unsubMsg);
 
-    // 2. MEMBER LISTENER
+    // 2. Members Listener
     const unsubRoom = onSnapshot(doc(db, "conversations", id), (snap) => {
-        const memberDiv = document.getElementById('member-list');
-        if (!memberDiv || !snap.exists()) return;
-        
-        // We use docChanges on the conversation doc isn't enough, we need to map the array
-        // So we clear and rebuild member list safely
-        memberDiv.innerHTML = "";
-        
+        const memberList = document.getElementById('member-list');
+        memberList.innerHTML = "";
+        if(!snap.exists()) return;
         snap.data().members.forEach(uid => {
             const unsubMem = onSnapshot(doc(db, "users", uid), (uSnap) => {
                 const u = uSnap.data(); if (!u) return;
-                
-                const existing = document.getElementById(`mem-${uid}`);
-                if (existing) existing.remove();
-
+                const old = document.getElementById(`mem-${uid}`); if(old) old.remove();
                 const row = document.createElement('div');
                 row.id = `mem-${uid}`;
                 row.style = "display:flex; align-items:center; margin-bottom:12px; font-size:14px;";
@@ -182,7 +146,7 @@ async function openChat(id, name) {
                         <div class="status-dot ${u.status === 'online' ? 'online' : 'offline'}"></div>
                     </div>
                     <span>${u.username}</span>`;
-                memberDiv.appendChild(row);
+                memberList.appendChild(row);
             });
             activeListeners.push(unsubMem);
         });
@@ -190,71 +154,60 @@ async function openChat(id, name) {
     activeListeners.push(unsubRoom);
 }
 
-// --- GLOBAL ACTIONS ---
+// --- ACTIONS ---
+window.sendMessage = async () => {
+    const input = document.getElementById('msg-input');
+    const txt = input.value.trim();
+    if (!activeChatId || !txt || txt === "undefined") return;
+    input.value = "";
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+        content: txt, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp(), type: "chat"
+    });
+    await updateDoc(doc(db, "conversations", activeChatId), { lastMessageAt: serverTimestamp() });
+};
+
+window.addUserToActiveChat = async () => {
+    const input = document.getElementById('add-to-chat-input');
+    const name = input.value.toLowerCase().trim();
+    if (!activeChatId || !name) return;
+    const uSnap = await getDoc(doc(db, "usernames", name));
+    if (uSnap.exists()) {
+        const uid = uSnap.data().uid;
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(uid) });
+        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+            content: `@${name} was added to the channel.`, type: "system", timestamp: serverTimestamp()
+        });
+        input.value = "";
+        showToast(`Added @${name}`);
+    } else { showToast("User not found"); }
+};
+
 window.handleSignup = async () => {
+    const u = document.getElementById('username').value.toLowerCase().trim();
+    const p = document.getElementById('password').value;
     try {
-        const u = document.getElementById('username').value.toLowerCase().trim();
-        const p = document.getElementById('password').value;
-        if(!u || !p) return showToast("Please fill all fields", true);
-        
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
         await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
         await setDoc(doc(db, "users", res.user.uid), { username: u, uid: res.user.uid, status: "online" });
-    } catch(e) { showToast(e.message, true); }
+    } catch(e) { alert(e.message); }
 };
 
 window.handleLogin = async () => {
-    try {
-        const u = document.getElementById('username').value.toLowerCase().trim();
-        const p = document.getElementById('password').value;
-        await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-    } catch(e) { showToast("Login failed: " + e.message, true); }
-};
-
-window.sendMessage = async () => {
-    const input = document.getElementById('msg-input');
-    if (!activeChatId || !input.value.trim()) return;
-    const txt = input.value;
-    input.value = "";
-    
-    try {
-        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-            content: txt, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
-        });
-        await updateDoc(doc(db, "conversations", activeChatId), { lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid });
-    } catch(e) { showToast("Failed to send", true); input.value = txt; }
-};
-
-// Handle Enter to send
-document.getElementById('msg-input').addEventListener('keydown', (e) => {
-    if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.sendMessage(); }
-});
-
-window.searchAndAdd = async () => {
-    const target = document.getElementById('search-username').value.toLowerCase().trim();
-    if(!target) return;
-    const snap = await getDoc(doc(db, "usernames", target));
-    if(snap.exists()) { 
-        selectedMembers.push(snap.data().uid); 
-        showToast(`@${target} staged for invite!`);
-        document.getElementById('search-username').value = "";
-    } else { showToast("User not found", true); }
+    const u = document.getElementById('username').value.toLowerCase().trim();
+    const p = document.getElementById('password').value;
+    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { alert(e.message); }
 };
 
 window.startGroupChat = async () => {
-    const name = document.getElementById('group-name').value;
-    if(!name) return showToast("Enter a room name", true);
-    
-    const docRef = await addDoc(collection(db, "conversations"), { 
-        name, members: [...selectedMembers, currentUser.uid], lastMessageAt: serverTimestamp() 
-    });
-    selectedMembers = [];
+    const name = document.getElementById('group-name').value.trim();
+    if (!name) return;
+    const ref = await addDoc(collection(db, "conversations"), { name, members: [currentUser.uid], lastMessageAt: serverTimestamp() });
     document.getElementById('group-name').value = "";
-    openChat(docRef.id, name);
+    openChat(ref.id, name);
 };
 
 window.leaveCurrentGroup = async () => {
-    if (!activeChatId || !confirm("Leave this channel?")) return;
+    if (!confirm("Leave channel?")) return;
     await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
     location.reload();
 };
