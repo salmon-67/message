@@ -24,102 +24,104 @@ onAuthStateChanged(auth, async (user) => {
         currentUser = user;
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
-        loadChatList();
+        loadChannels();
     }
 });
 
-function loadChatList() {
+function loadChannels() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         list.innerHTML = "";
         snap.forEach(d => {
             const item = document.createElement('div');
-            item.style = `padding:12px; cursor:pointer; margin:4px 8px; border-radius:4px; ${activeChatId === d.id ? 'background:#404249;' : ''}`;
+            item.style = `padding:12px; cursor:pointer; ${activeChatId === d.id ? 'background:#404249;' : ''}`;
             item.innerText = "# " + d.data().name;
-            item.onclick = () => openChat(d.id, d.data().name);
+            item.onclick = () => openChat(d.id, d.data().name, d.data().members);
             list.appendChild(item);
         });
     });
 }
 
-async function openChat(id, name) {
+async function openChat(id, name, members) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
     document.getElementById('chat-title').innerText = "# " + name;
-    document.getElementById('messages').innerHTML = "";
-    document.getElementById('sidebar-left').classList.remove('open');
+    loadMembers(members);
 
     const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     msgUnsub = onSnapshot(q, (snap) => {
         const box = document.getElementById('messages');
         box.innerHTML = "";
-        snap.forEach(change => {
-            const m = change.data();
-            if (!m.content || !m.timestamp) return;
-            const row = document.createElement('div');
-            row.className = `msg-container ${m.senderId === currentUser.uid ? 'mine' : ''}`;
-            row.innerHTML = `<div class="msg-content">
-                <div style="font-size:10px; opacity:0.5;">${m.senderName}</div>
-                <div>${m.content}</div>
-            </div>`;
-            box.appendChild(row);
+        snap.forEach(d => {
+            const m = d.data();
+            const div = document.createElement('div');
+            div.style = `display:flex; margin-bottom:10px; ${m.senderId === currentUser.uid ? 'justify-content:flex-end' : ''}`;
+            div.innerHTML = `<div class="msg-content"><small style="display:block;opacity:0.5">${m.senderName}</small>${m.content}</div>`;
+            box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
     });
 }
 
-// THE "ADD TO GROUP" LOGIC
-document.getElementById('btn-add-user').addEventListener('click', async () => {
-    const nameInput = document.getElementById('add-user-input');
-    const targetName = nameInput.value.toLowerCase().trim();
-    if (!targetName || !activeChatId) return;
-
-    const userSnap = await getDoc(doc(db, "usernames", targetName));
-    if (userSnap.exists()) {
-        const targetId = userSnap.data().uid;
-        await updateDoc(doc(db, "conversations", activeChatId), {
-            members: arrayUnion(targetId)
-        });
-        alert(`Added ${targetName}!`);
-        nameInput.value = "";
-    } else {
-        alert("User not found!");
+async function loadMembers(memberIds) {
+    const list = document.getElementById('member-list');
+    list.innerHTML = "Loading...";
+    const memberData = [];
+    
+    for (const uid of memberIds) {
+        const snap = await getDoc(doc(db, "users", uid));
+        if (snap.exists()) memberData.push(snap.data().username || "Unknown");
     }
-});
 
-document.getElementById('btn-send').addEventListener('click', async () => {
+    list.innerHTML = "";
+    memberData.forEach(name => {
+        const div = document.createElement('div');
+        div.className = "member-item";
+        div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${name}`;
+        list.appendChild(div);
+    });
+}
+
+// TOGGLE SIDEBAR
+document.getElementById('btn-toggle-menu').onclick = () => {
+    document.getElementById('sidebar-left').classList.toggle('collapsed');
+};
+
+document.getElementById('btn-add-user').onclick = async () => {
+    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
+    if (!name || !activeChatId) return;
+    const snap = await getDoc(doc(db, "usernames", name));
+    if (snap.exists()) {
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
+        alert("Added!");
+    }
+};
+
+document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
-    if (!input.value.trim() || !activeChatId) return;
+    if (!input.value || !activeChatId) return;
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: input.value,
-        senderId: currentUser.uid,
-        senderName: currentUser.email.split('@')[0],
-        timestamp: serverTimestamp()
+        content: input.value, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
     });
     input.value = "";
-});
+};
 
-document.getElementById('btn-create-channel').addEventListener('click', async () => {
-    const n = document.getElementById('group-name').value;
-    if (!n) return;
-    await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
-    document.getElementById('group-name').value = "";
-});
-
-document.getElementById('btn-login').addEventListener('click', async () => {
-    const u = document.getElementById('username').value.toLowerCase().trim() + "@salmon.com";
+document.getElementById('btn-login').onclick = () => {
+    const u = document.getElementById('username').value + "@salmon.com";
     const p = document.getElementById('password').value;
-    signInWithEmailAndPassword(auth, u, p).catch(e => alert(e.message));
-});
+    signInWithEmailAndPassword(auth, u, p);
+};
 
-document.getElementById('btn-signup').addEventListener('click', async () => {
-    const u = document.getElementById('username').value.toLowerCase().trim();
+document.getElementById('btn-signup').onclick = async () => {
+    const u = document.getElementById('username').value.toLowerCase();
     const p = document.getElementById('password').value;
     const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
     await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
     await setDoc(doc(db, "users", res.user.uid), { username: u });
-});
+};
 
-document.getElementById('btn-open-menu').onclick = () => document.getElementById('sidebar-left').classList.add('open');
-document.getElementById('btn-close-menu').onclick = () => document.getElementById('sidebar-left').classList.remove('open');
+document.getElementById('btn-create-channel').onclick = () => {
+    const n = document.getElementById('group-name').value;
+    addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+};
