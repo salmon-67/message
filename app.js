@@ -19,7 +19,6 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- AUTHENTICATION ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
@@ -45,70 +44,57 @@ onAuthStateChanged(auth, (user) => {
     }
 });
 
-// --- ROOM CREATION ---
 window.searchAndAdd = async () => {
     const target = document.getElementById('search-username').value.toLowerCase().trim();
+    if (!target) return;
     const snap = await getDoc(doc(db, "usernames", target));
     if (snap.exists()) {
         const uid = snap.data().uid;
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
-            alert(`@${target} added to invite list!`);
+            alert(`@${target} added!`);
             document.getElementById('search-username').value = "";
         }
-    } else alert("User not found");
+    } else { alert("User not found"); }
 };
 
 window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
-    if(!name) return;
+    if (!name) return alert("Enter room name");
     const members = [...selectedMembers, currentUser.uid];
-    const docRef = await addDoc(collection(db, "conversations"), { 
-        name, 
-        members, 
-        lastMessageAt: serverTimestamp(), 
-        lastMessageBy: currentUser.uid 
-    });
-    selectedMembers = [];
-    document.getElementById('group-name').value = "";
+    try {
+        await addDoc(collection(db, "conversations"), { 
+            name, 
+            members, 
+            lastMessageAt: serverTimestamp(), 
+            lastMessageBy: currentUser.uid 
+        });
+        selectedMembers = [];
+        document.getElementById('group-name').value = "";
+    } catch (e) { console.error(e); }
 };
 
-// --- FIXED CHAT LIST (Client-Side Sorting) ---
 function loadChatList() {
-    // We remove the 'orderBy' from the server query to avoid Index Errors on iPad
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
-    
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
-        list.innerHTML = "";
-        
-        // 1. Convert snapshot to an array so we can sort it manually
         let chats = [];
-        snap.forEach(doc => {
-            chats.push({ id: doc.id, ...doc.data() });
-        });
+        snap.forEach(d => chats.push({ id: d.id, ...d.data() }));
 
-        // 2. Sort the array: Most recent 'lastMessageAt' goes to the top
-        chats.sort((a, b) => {
-            const timeA = a.lastMessageAt?.toMillis() || 0;
-            const timeB = b.lastMessageAt?.toMillis() || 0;
-            return timeB - timeA;
-        });
+        // Manual sorting for iPad/Mobile to bypass Index requirements
+        chats.sort((a, b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
 
-        // 3. Render the sorted list
+        list.innerHTML = "";
         chats.forEach(async (data) => {
-            const chatId = data.id;
             const btn = document.createElement('button');
-            btn.className = `chat-item ${activeChatId === chatId ? 'active' : ''}`;
+            btn.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
             btn.innerHTML = `<span># ${data.name}</span><div class="unread-dot"></div>`;
-            btn.onclick = () => openChat(chatId, data.name);
+            btn.onclick = () => openChat(data.id, data.name);
             list.appendChild(btn);
 
-            // Unread logic
-            const statusSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", chatId));
+            const statusSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", data.id));
             const lastRead = statusSnap.exists() ? statusSnap.data().at?.toMillis() : 0;
             const lastMsg = data.lastMessageAt?.toMillis() || 0;
-            
             if (lastMsg > lastRead && data.lastMessageBy !== currentUser.uid) {
                 btn.classList.add('unread');
             }
@@ -119,12 +105,10 @@ function loadChatList() {
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
-    document.getElementById('sidebar-left').classList.remove('open');
+    if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
     
-    // Mark as read
     await setDoc(doc(db, "users", currentUser.uid, "readStatus", id), { at: serverTimestamp() }, { merge: true });
 
-    // Messages Query (Index not required for simple sub-collection ordering)
     const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     onSnapshot(qMsg, (snap) => {
         const msgDiv = document.getElementById('messages');
@@ -135,7 +119,7 @@ async function openChat(id, name) {
             msgDiv.innerHTML += `
                 <div class="msg-bubble ${isMine ? 'mine' : ''}">
                     <div class="msg-content">
-                        <small style="display:block; font-size:10px; margin-bottom:4px; opacity:0.6;">@${data.senderName}</small>
+                        <small style="display:block; font-size:10px; opacity:0.5;">@${data.senderName}</small>
                         ${data.content}
                     </div>
                 </div>`;
@@ -150,15 +134,11 @@ window.sendMessage = async () => {
     const content = input.value;
     const senderName = auth.currentUser.email.split('@')[0];
     input.value = "";
-
-    // 1. Add message
-    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content, senderId: currentUser.uid, senderName, timestamp: serverTimestamp()
-    });
-
-    // 2. Update parent room timestamp (This triggers the list to re-sort)
+    
+    const msgData = { content, senderId: currentUser.uid, senderName, timestamp: serverTimestamp() };
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), msgData);
     await updateDoc(doc(db, "conversations", activeChatId), {
-        lastMessageAt: serverTimestamp(), 
+        lastMessageAt: serverTimestamp(),
         lastMessageBy: currentUser.uid
     });
 };
