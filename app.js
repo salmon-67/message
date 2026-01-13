@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayRemove, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-storage.js";
 
 const firebaseConfig = {
@@ -17,6 +17,13 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
 
+// Fix "Client is Offline" by forcing persistence check
+try {
+    enableIndexedDbPersistence(db);
+} catch (err) {
+    console.warn("Persistence failed", err.code);
+}
+
 let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
@@ -24,22 +31,22 @@ let isCreating = false;
 
 const emojiMap = { ":heart:": "❤️", ":fire:": "🔥", ":smile:": "😊", ":lol:": "😂", ":rocket:": "🚀" };
 
-// --- AUTH LOGIC ---
+// --- AUTH ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
-    if(!user || pass.length < 6) return alert("Min 6 chars for password");
+    if(!user || pass.length < 6) return alert("Min 6 characters for password");
 
     try {
         const nameCheck = await getDoc(doc(db, "usernames", user));
         if (nameCheck.exists()) return alert("Username taken!");
 
         const res = await createUserWithEmailAndPassword(auth, `${user}@salmon.com`, pass);
-        // Delay to allow Firebase Auth to propagate
+        // Wait for auth to settle
         setTimeout(async () => {
             await setDoc(doc(db, "usernames", user), { uid: res.user.uid });
             await setDoc(doc(db, "users", res.user.uid), { username: user, uid: res.user.uid });
-            alert("Signed up!");
+            alert("Account Created!");
         }, 1000);
     } catch (e) { alert(e.message); }
 };
@@ -48,7 +55,7 @@ window.handleLogin = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
     try { await signInWithEmailAndPassword(auth, `${user}@salmon.com`, pass); } 
-    catch (e) { alert("Login failed"); }
+    catch (e) { alert("Login Error: " + e.message); }
 };
 
 onAuthStateChanged(auth, (user) => {
@@ -60,14 +67,15 @@ onAuthStateChanged(auth, (user) => {
     }
 });
 
-// --- GROUP LOGIC ---
+// --- GROUPS ---
 window.searchAndAdd = async () => {
     const input = document.getElementById('search-username');
     const target = input.value.toLowerCase().trim();
+    if(!target) return;
     const snap = await getDoc(doc(db, "usernames", target));
     if (snap.exists()) {
         const uid = snap.data().uid;
-        if (uid === currentUser.uid) return alert("You are you!");
+        if (uid === currentUser.uid) return alert("You are already the host");
         if (!selectedMembers.includes(uid)) {
             selectedMembers.push(uid);
             const tag = document.createElement('span');
@@ -80,29 +88,33 @@ window.searchAndAdd = async () => {
 
 window.startGroupChat = async () => {
     const name = document.getElementById('group-name').value.trim();
-    if (isCreating || !name || selectedMembers.length === 0) return alert("Add a name and friends");
+    if (isCreating || !name || selectedMembers.length === 0) return alert("Need name & users");
     
     isCreating = true;
     document.getElementById('create-btn').disabled = true;
 
     const members = [...selectedMembers, currentUser.uid];
-    const docRef = await addDoc(collection(db, "conversations"), {
-        name: name, members: members, updatedAt: serverTimestamp()
-    });
+    try {
+        const docRef = await addDoc(collection(db, "conversations"), {
+            name: name, members: members, updatedAt: serverTimestamp()
+        });
 
-    await addDoc(collection(db, "conversations", docRef.id, "messages"), {
-        content: `Room "${name}" created`, type: "system", timestamp: serverTimestamp()
-    });
+        await addDoc(collection(db, "conversations", docRef.id, "messages"), {
+            content: `Room Created`, type: "system", timestamp: serverTimestamp()
+        });
 
-    selectedMembers = [];
-    document.getElementById('selected-users').innerHTML = "";
-    document.getElementById('group-name').value = "";
-    isCreating = false;
-    document.getElementById('create-btn').disabled = false;
-    openChat(docRef.id, name);
+        selectedMembers = [];
+        document.getElementById('selected-users').innerHTML = "";
+        document.getElementById('group-name').value = "";
+        openChat(docRef.id, name);
+    } catch (e) { console.error(e); }
+    finally {
+        isCreating = false;
+        document.getElementById('create-btn').disabled = false;
+    }
 };
 
-// --- MESSAGING ---
+// --- CHAT ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -141,7 +153,7 @@ function openChat(id, name) {
                     </div>`;
             }
         });
-        msgDiv.scrollTop = msgDiv.scrollHeight; // Auto-scroll to bottom
+        msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 }
 
@@ -164,7 +176,7 @@ window.sendMessage = async () => {
             timestamp: serverTimestamp()
         });
         input.value = "";
-    } catch(e) { alert("Permission error! Check Firestore Rules."); }
+    } catch(e) { console.error(e); }
 };
 
 window.uploadImage = async (input) => {
@@ -178,7 +190,7 @@ window.uploadImage = async (input) => {
             content: url, type: "image", senderId: currentUser.uid,
             senderName: auth.currentUser.email.split('@')[0], timestamp: serverTimestamp()
         });
-    } catch (e) { alert("Upload failed"); }
+    } catch (e) { console.error(e); }
 };
 
 window.leaveGroup = async () => {
