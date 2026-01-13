@@ -19,18 +19,15 @@ let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
 
-// --- AUTH HANDLER ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
-        await setDoc(doc(db, "users", user.uid), { status: "online" }, { merge: true });
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChatList();
     }
 });
 
-// --- CHANNEL LIST ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -46,7 +43,6 @@ function loadChatList() {
     });
 }
 
-// --- MESSAGE LISTENER ---
 async function openChat(id, name) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
@@ -59,26 +55,14 @@ async function openChat(id, name) {
         snap.docChanges().forEach(change => {
             if (change.type === "added") {
                 const m = change.doc.data();
-                
-                // BOUNCER: Ignore undefined or broken data
-                if (!m || !m.content || m.content === "undefined" || !m.timestamp) return;
-
+                if (!m || !m.content || !m.timestamp) return;
                 const row = document.createElement('div');
-                if (m.type === 'system') {
-                    row.className = "system-msg";
-                    row.innerHTML = `<span>${m.content}</span>`;
-                } else {
-                    const isMine = m.senderId === currentUser.uid;
-                    row.className = `msg-container ${isMine ? 'mine' : ''}`;
-                    row.innerHTML = `
-                        <div style="width:32px; height:32px; margin:0 8px; flex-shrink:0;">
-                            <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" style="width:100%; border-radius:50%;">
-                        </div>
-                        <div class="msg-content">
-                            <div style="font-size:10px; opacity:0.5; margin-bottom:2px;">${m.senderName}</div>
-                            <div>${m.content}</div>
-                        </div>`;
-                }
+                const isMine = m.senderId === currentUser.uid;
+                row.className = `msg-container ${isMine ? 'mine' : ''}`;
+                row.innerHTML = `<div class="msg-content">
+                    <div style="font-size:10px; opacity:0.5;">${m.senderName}</div>
+                    <div>${m.content}</div>
+                </div>`;
                 const box = document.getElementById('messages');
                 box.appendChild(row);
                 box.scrollTop = box.scrollHeight;
@@ -87,21 +71,20 @@ async function openChat(id, name) {
     });
 }
 
-// --- UI BUTTONS (addEventListener fix) ---
+// Button Listeners
 document.getElementById('btn-send').addEventListener('click', async () => {
     const input = document.getElementById('msg-input');
-    const val = input.value.trim();
-    if (!val || !activeChatId) return;
-    input.value = "";
+    if (!input.value.trim() || !activeChatId) return;
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: val, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
+        content: input.value, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
     });
+    input.value = "";
 });
 
 document.getElementById('btn-login').addEventListener('click', async () => {
-    const u = document.getElementById('username').value.toLowerCase().trim();
+    const u = document.getElementById('username').value.toLowerCase().trim() + "@salmon.com";
     const p = document.getElementById('password').value;
-    try { await signInWithEmailAndPassword(auth, u + "@salmon.com", p); } catch(e) { alert(e.message); }
+    try { await signInWithEmailAndPassword(auth, u, p); } catch(e) { alert(e.message); }
 });
 
 document.getElementById('btn-signup').addEventListener('click', async () => {
@@ -115,24 +98,10 @@ document.getElementById('btn-signup').addEventListener('click', async () => {
 });
 
 document.getElementById('btn-create-channel').addEventListener('click', async () => {
-    const n = document.getElementById('group-name').value.trim();
+    const n = document.getElementById('group-name').value;
     if (!n) return;
-    await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid], lastMessageAt: serverTimestamp() });
+    await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
     document.getElementById('group-name').value = "";
-});
-
-document.getElementById('btn-add-user').addEventListener('click', async () => {
-    const input = document.getElementById('add-user-input');
-    const name = input.value.toLowerCase().trim();
-    if (!name || !activeChatId) return;
-    const snap = await getDoc(doc(db, "usernames", name));
-    if (snap.exists()) {
-        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-            content: `@${name} was added`, type: 'system', timestamp: serverTimestamp()
-        });
-        input.value = "";
-    } else { alert("User not found"); }
 });
 
 document.getElementById('btn-open-menu').onclick = () => document.getElementById('sidebar-left').classList.add('open');
