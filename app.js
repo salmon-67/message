@@ -19,17 +19,7 @@ let currentUser = null;
 let activeChatId = null;
 let selectedMembers = [];
 
-// --- PRESENCE SYSTEM ---
-const updateStatus = async (status) => {
-    if (currentUser) {
-        await setDoc(doc(db, "users", currentUser.uid), { 
-            status: status, 
-            lastSeen: serverTimestamp() 
-        }, { merge: true });
-    }
-};
-
-// --- AUTHENTICATION ---
+// --- AUTH ---
 window.handleSignup = async () => {
     const user = document.getElementById('username').value.toLowerCase().trim();
     const pass = document.getElementById('password').value;
@@ -49,95 +39,66 @@ window.handleLogin = async () => {
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
-        updateStatus("online");
+        await setDoc(doc(db, "users", user.uid), { status: "online" }, { merge: true });
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChatList();
     }
 });
 
-window.addEventListener('beforeunload', () => updateStatus("offline"));
-
-// --- INVITES & ROOMS ---
-window.searchAndAdd = async () => {
-    const target = document.getElementById('search-username').value.toLowerCase().trim();
-    if (!target) return;
-    const snap = await getDoc(doc(db, "usernames", target));
-    if (snap.exists()) {
-        const uid = snap.data().uid;
-        if (!selectedMembers.includes(uid)) {
-            selectedMembers.push(uid);
-            alert(`Ready to invite @${target}`);
-            document.getElementById('search-username').value = "";
-        }
-    } else { alert("User not found"); }
-};
-
-window.startGroupChat = async () => {
-    const name = document.getElementById('group-name').value.trim();
-    if (!name) return;
-    const members = [...selectedMembers, currentUser.uid];
-    const docRef = await addDoc(collection(db, "conversations"), { 
-        name, 
-        members, 
-        lastMessageAt: serverTimestamp(), 
-        lastMessageBy: currentUser.uid 
-    });
-    selectedMembers = [];
-    document.getElementById('group-name').value = "";
-    openChat(docRef.id, name);
-};
-
-// --- REAL-TIME LISTENERS ---
+// --- CHANNEL LIST (Simplified for iPad) ---
 function loadChatList() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
+    
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
         list.innerHTML = "";
         let rooms = [];
         snap.forEach(d => rooms.push({ id: d.id, ...d.data() }));
-
-        // Client-side sort to fix iPad/Index issues
+        
+        // Sort: Most recent message first
         rooms.sort((a,b) => (b.lastMessageAt?.toMillis() || 0) - (a.lastMessageAt?.toMillis() || 0));
 
-        rooms.forEach(async (data) => {
+        rooms.forEach(data => {
             const item = document.createElement('div');
             item.className = `chat-item ${activeChatId === data.id ? 'active' : ''}`;
+            item.style.cursor = "pointer"; // Force iPad pointer
             item.innerHTML = `<span># ${data.name}</span>`;
-            item.onclick = () => openChat(data.id, data.name);
             
-            // Unread check
-            const rSnap = await getDoc(doc(db, "users", currentUser.uid, "readStatus", data.id));
-            const lastRead = rSnap.exists() ? rSnap.data().at?.toMillis() : 0;
-            if ((data.lastMessageAt?.toMillis() || 0) > lastRead && data.lastMessageBy !== currentUser.uid) {
-                item.classList.add('unread');
-            }
+            // Using a direct event listener for better iPad response
+            item.addEventListener('click', () => {
+                openChat(data.id, data.name);
+            });
+            
             list.appendChild(item);
         });
     });
 }
 
+// --- MESSAGES & USERS ---
 async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('current-chat-title').innerText = name;
-    if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
     
-    // Mark as Read
-    await setDoc(doc(db, "users", currentUser.uid, "readStatus", id), { at: serverTimestamp() }, { merge: true });
+    // Clear view and close sidebar on mobile
+    const msgDiv = document.getElementById('messages');
+    msgDiv.innerHTML = "<p style='color:gray; padding:20px;'>Syncing...</p>";
+    if (window.innerWidth < 768) document.getElementById('sidebar-left').classList.remove('open');
 
-    // Listen for Messages
-    const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    onSnapshot(qMsg, (snap) => {
-        const msgDiv = document.getElementById('messages');
+    // Messages
+    const msgQuery = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
+    onSnapshot(msgQuery, (snap) => {
         msgDiv.innerHTML = "";
         snap.forEach(d => {
             const m = d.data();
             const isMine = m.senderId === currentUser.uid;
             msgDiv.innerHTML += `
                 <div class="msg-bubble ${isMine ? 'mine' : ''}">
-                    <div class="avatar-box"><img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img"></div>
+                    <div class="avatar-box">
+                        <img src="https://ui-avatars.com/api/?name=${m.senderName}&background=random" class="avatar-img">
+                    </div>
                     <div class="msg-content">
-                        <small style="display:block; font-size:10px; font-weight:bold; margin-bottom:3px;">@${m.senderName}</small>
+                        <small style="font-weight:bold; display:block; font-size:10px; margin-bottom:2px;">@${m.senderName}</small>
                         ${m.content}
                     </div>
                 </div>`;
@@ -145,11 +106,10 @@ async function openChat(id, name) {
         msgDiv.scrollTop = msgDiv.scrollHeight;
     });
 
-    // Listen for Online Members in THIS room
+    // Online Members
     onSnapshot(doc(db, "conversations", id), (snap) => {
         const members = snap.data().members;
         const memberList = document.getElementById('member-list');
-        document.getElementById('member-count').innerText = members.length;
         memberList.innerHTML = "";
         
         members.forEach(uid => {
@@ -175,6 +135,7 @@ async function openChat(id, name) {
     });
 }
 
+// --- SENDING ---
 window.sendMessage = async () => {
     const input = document.getElementById('msg-input');
     if (!activeChatId || !input.value.trim()) return;
@@ -185,7 +146,34 @@ window.sendMessage = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content, senderId: currentUser.uid, senderName, timestamp: serverTimestamp()
     });
+    
     await updateDoc(doc(db, "conversations", activeChatId), {
         lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid
     });
+};
+
+// --- INVITES ---
+window.searchAndAdd = async () => {
+    const target = document.getElementById('search-username').value.toLowerCase().trim();
+    if(!target) return;
+    const snap = await getDoc(doc(db, "usernames", target));
+    if(snap.exists()){
+        const uid = snap.data().uid;
+        if(!selectedMembers.includes(uid)){
+            selectedMembers.push(uid);
+            alert(`@${target} added!`);
+            document.getElementById('search-username').value = "";
+        }
+    } else { alert("User not found"); }
+};
+
+window.startGroupChat = async () => {
+    const name = document.getElementById('group-name').value.trim();
+    if(!name) return;
+    const docRef = await addDoc(collection(db, "conversations"), { 
+        name, members: [...selectedMembers, currentUser.uid], lastMessageAt: serverTimestamp(), lastMessageBy: currentUser.uid 
+    });
+    selectedMembers = [];
+    document.getElementById('group-name').value = "";
+    openChat(docRef.id, name);
 };
