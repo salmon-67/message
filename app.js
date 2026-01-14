@@ -47,6 +47,11 @@ async function openChat(id, name, members) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
     document.getElementById('chat-title').innerText = "# " + name;
+    
+    // MOBILE FIX: Auto-close sidebar when chat opens
+    document.getElementById('sidebar-left').classList.add('collapsed');
+    document.getElementById('sidebar-left').classList.remove('open');
+
     loadMembers(members);
 
     const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
@@ -66,26 +71,28 @@ async function openChat(id, name, members) {
 
 async function loadMembers(memberIds) {
     const list = document.getElementById('member-list');
-    list.innerHTML = "Loading...";
-    const memberData = [];
+    if (!list) return; // Guard for mobile where list is hidden
+    list.innerHTML = "";
     
     for (const uid of memberIds) {
         const snap = await getDoc(doc(db, "users", uid));
-        if (snap.exists()) memberData.push(snap.data().username || "Unknown");
+        if (snap.exists()) {
+            const div = document.createElement('div');
+            div.className = "member-item";
+            div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${snap.data().username}`;
+            list.appendChild(div);
+        }
     }
-
-    list.innerHTML = "";
-    memberData.forEach(name => {
-        const div = document.createElement('div');
-        div.className = "member-item";
-        div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${name}`;
-        list.appendChild(div);
-    });
 }
 
-// TOGGLE SIDEBAR
+// TOGGLE SIDEBAR (Works for Phone and Desktop)
 document.getElementById('btn-toggle-menu').onclick = () => {
-    document.getElementById('sidebar-left').classList.toggle('collapsed');
+    const side = document.getElementById('sidebar-left');
+    if (window.innerWidth <= 768) {
+        side.classList.toggle('open');
+    } else {
+        side.classList.toggle('collapsed');
+    }
 };
 
 document.getElementById('btn-add-user').onclick = async () => {
@@ -94,13 +101,13 @@ document.getElementById('btn-add-user').onclick = async () => {
     const snap = await getDoc(doc(db, "usernames", name));
     if (snap.exists()) {
         await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-        alert("Added!");
+        alert("User added!");
     }
 };
 
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
-    if (!input.value || !activeChatId) return;
+    if (!input.value.trim() || !activeChatId) return;
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: input.value, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
     });
@@ -108,13 +115,13 @@ document.getElementById('btn-send').onclick = async () => {
 };
 
 document.getElementById('btn-login').onclick = () => {
-    const u = document.getElementById('username').value + "@salmon.com";
+    const u = document.getElementById('username').value.trim().toLowerCase() + "@salmon.com";
     const p = document.getElementById('password').value;
     signInWithEmailAndPassword(auth, u, p);
 };
 
 document.getElementById('btn-signup').onclick = async () => {
-    const u = document.getElementById('username').value.toLowerCase();
+    const u = document.getElementById('username').value.toLowerCase().trim();
     const p = document.getElementById('password').value;
     const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
     await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
@@ -122,6 +129,6 @@ document.getElementById('btn-signup').onclick = async () => {
 };
 
 document.getElementById('btn-create-channel').onclick = () => {
-    const n = document.getElementById('group-name').value;
-    addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+    const n = document.getElementById('group-name').value.trim();
+    if (n) addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
 };
