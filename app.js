@@ -1,5 +1,5 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -19,15 +19,41 @@ let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
 
+// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
+        const name = user.email.split('@')[0];
+        document.getElementById('user-display-name').innerText = name;
+        document.getElementById('user-badge').innerText = name[0].toUpperCase();
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         loadChannels();
+    } else {
+        document.getElementById('auth-container').style.display = 'block';
+        document.getElementById('app-container').style.display = 'none';
     }
 });
 
+document.getElementById('btn-login').onclick = () => {
+    const u = document.getElementById('username').value.trim().toLowerCase();
+    const p = document.getElementById('password').value;
+    signInWithEmailAndPassword(auth, u + "@salmon.com", p).catch(() => alert("Firebase error"));
+};
+
+document.getElementById('btn-signup').onclick = async () => {
+    const u = document.getElementById('username').value.trim().toLowerCase();
+    const p = document.getElementById('password').value;
+    try {
+        const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
+        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
+        await setDoc(doc(db, "users", res.user.uid), { username: u });
+    } catch (e) { alert("Firebase error"); }
+};
+
+document.getElementById('btn-logout').onclick = () => signOut(auth);
+
+// --- CHAT LOGIC ---
 function loadChannels() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
@@ -35,8 +61,8 @@ function loadChannels() {
         list.innerHTML = "";
         snap.forEach(d => {
             const item = document.createElement('div');
-            item.style = `padding:12px; cursor:pointer; ${activeChatId === d.id ? 'background:#404249;' : ''}`;
-            item.innerText = "# " + d.data().name;
+            item.className = `channel-item ${activeChatId === d.id ? 'active' : ''}`;
+            item.innerHTML = `<span># ${d.data().name}</span>`;
             item.onclick = () => openChat(d.id, d.data().name, d.data().members);
             list.appendChild(item);
         });
@@ -46,13 +72,13 @@ function loadChannels() {
 async function openChat(id, name, members) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
-    document.getElementById('chat-title').innerText = "# " + name;
     
-    // Show Leave Button when a chat is opened
+    // Switch Views
+    document.getElementById('welcome-view').style.display = 'none';
+    document.getElementById('messages').style.display = 'flex';
+    document.getElementById('input-area').style.display = 'block';
     document.getElementById('btn-leave-chat').style.display = 'block';
-
-    document.getElementById('sidebar-left').classList.add('collapsed');
-    document.getElementById('sidebar-left').classList.remove('open');
+    document.getElementById('chat-title').innerHTML = `<span style="opacity:0.5">#</span> ${name}`;
 
     loadMembers(members);
 
@@ -63,8 +89,8 @@ async function openChat(id, name, members) {
         snap.forEach(d => {
             const m = d.data();
             const div = document.createElement('div');
-            div.style = `display:flex; margin-bottom:10px; ${m.senderId === currentUser.uid ? 'justify-content:flex-end' : ''}`;
-            div.innerHTML = `<div class="msg-content"><small style="display:block;opacity:0.5">${m.senderName}</small>${m.content}</div>`;
+            div.className = 'msg-container';
+            div.innerHTML = `<span class="msg-sender">${m.senderName}</span><span class="msg-content">${m.content}</span>`;
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
@@ -73,66 +99,19 @@ async function openChat(id, name, members) {
 
 async function loadMembers(memberIds) {
     const list = document.getElementById('member-list');
-    if (!list) return;
     list.innerHTML = "";
-    
     for (const uid of memberIds) {
         const snap = await getDoc(doc(db, "users", uid));
         if (snap.exists()) {
             const div = document.createElement('div');
-            div.className = "member-item";
-            div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${snap.data().username}`;
+            div.style = "padding:4px 0; font-size:13px; display:flex; align-items:center; gap:8px;";
+            div.innerHTML = `<div style="width:6px; height:6px; background:var(--discord-green); border-radius:50%"></div> ${snap.data().username}`;
             list.appendChild(div);
         }
     }
 }
 
-// LEAVE CHAT LOGIC
-document.getElementById('btn-leave-chat').onclick = async () => {
-    if (!activeChatId || !currentUser) return;
-
-    if (confirm("Are you sure you want to leave this chat?")) {
-        try {
-            const chatRef = doc(db, "conversations", activeChatId);
-            await updateDoc(chatRef, {
-                members: arrayRemove(currentUser.uid)
-            });
-
-            // Reset UI
-            activeChatId = null;
-            if (msgUnsub) msgUnsub();
-            document.getElementById('messages').innerHTML = "";
-            document.getElementById('chat-title').innerText = "# welcome";
-            document.getElementById('member-list').innerHTML = "";
-            document.getElementById('btn-leave-chat').style.display = 'none';
-            
-            alert("You left the conversation.");
-        } catch (e) {
-            console.error(e);
-        }
-    }
-};
-
-document.getElementById('btn-toggle-menu').onclick = () => {
-    const side = document.getElementById('sidebar-left');
-    if (window.innerWidth <= 768) {
-        side.classList.toggle('open');
-    } else {
-        side.classList.toggle('collapsed');
-    }
-};
-
-document.getElementById('btn-add-user').onclick = async () => {
-    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
-    if (!name || !activeChatId) return;
-    const snap = await getDoc(doc(db, "usernames", name));
-    if (snap.exists()) {
-        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-        alert("User added!");
-        document.getElementById('add-user-input').value = "";
-    }
-};
-
+// --- BUTTONS ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     if (!input.value.trim() || !activeChatId) return;
@@ -142,26 +121,32 @@ document.getElementById('btn-send').onclick = async () => {
     input.value = "";
 };
 
-document.getElementById('btn-login').onclick = () => {
-    const u = document.getElementById('username').value.trim().toLowerCase() + "@salmon.com";
-    const p = document.getElementById('password').value;
-    signInWithEmailAndPassword(auth, u, p).catch(e => alert(e.message));
-};
-
-document.getElementById('btn-signup').onclick = async () => {
-    const u = document.getElementById('username').value.toLowerCase().trim();
-    const p = document.getElementById('password').value;
-    try {
-        const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
-        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
-        await setDoc(doc(db, "users", res.user.uid), { username: u });
-    } catch (e) { alert(e.message); }
-};
-
-document.getElementById('btn-create-channel').onclick = () => {
+document.getElementById('btn-create-channel').onclick = async () => {
     const n = document.getElementById('group-name').value.trim();
     if (n) {
-        addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+        await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
         document.getElementById('group-name').value = "";
     }
+};
+
+document.getElementById('btn-add-user').onclick = async () => {
+    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
+    if (!name || !activeChatId) return;
+    const snap = await getDoc(doc(db, "usernames", name));
+    if (snap.exists()) {
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
+        document.getElementById('add-user-input').value = "";
+        alert("User added!");
+    } else { alert("User not found"); }
+};
+
+document.getElementById('btn-leave-chat').onclick = async () => {
+    if (confirm("Leave this group?")) {
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
+        location.reload();
+    }
+};
+
+document.getElementById('btn-toggle-menu').onclick = () => {
+    document.getElementById('sidebar-left').classList.toggle('open');
 };
