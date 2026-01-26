@@ -11,8 +11,7 @@
 
         #sidebar-left { 
             width: 260px; background: var(--bg-sidebar); display: flex; flex-direction: column; 
-            border-right: 1px solid #1e1f22; transition: all 0.3s ease; overflow: hidden; 
-            z-index: 1001;
+            border-right: 1px solid #1e1f22; transition: all 0.3s ease; overflow: hidden; z-index: 1001;
         }
         
         #main-chat { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); min-width: 0; z-index: 1000; }
@@ -31,7 +30,13 @@
         
         #auth-container { margin:auto; background:var(--bg-sidebar); padding:30px; border-radius:12px; width:320px; text-align:center; z-index: 2000; }
 
-        #btn-leave-chat { background: var(--discord-red); margin-top: auto; display: none; }
+        /* The Leave Button Style */
+        #btn-leave-chat { 
+            background: var(--discord-red); 
+            width: 100%; 
+            margin-top: 20px;
+            display: block; /* Forced display */
+        }
 
         @media (max-width: 768px) {
             #sidebar-right { display: none !important; }
@@ -77,7 +82,7 @@
             <button id="btn-add-user" style="width:100%; font-size:12px;">Add</button>
             
             <div style="font-size:11px; font-weight:bold; opacity:0.6; margin:20px 0 10px 0;">MEMBERS</div>
-            <div id="member-list"></div>
+            <div id="member-list" style="flex: 1; overflow-y: auto;"></div>
 
             <button id="btn-leave-chat">Leave Group</button>
         </aside>
