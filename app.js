@@ -2,7 +2,7 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebas
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIG ---
+// --- CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
     authDomain: "message-salmon.firebaseapp.com",
@@ -16,83 +16,129 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// --- STATE ---
+// --- GLOBAL VARIABLES ---
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
 
-// --- AUTHENTICATION ---
+// --- AUTH LISTENER (THE BRAIN) ---
 onAuthStateChanged(auth, async (user) => {
+    const errBox = document.getElementById('login-error');
+    
     if (user) {
-        currentUser = user;
-        // Load User Profile
-        const userRef = doc(db, "users", user.uid);
-        const userSnap = await getDoc(userRef);
+        console.log("Auth Detected: " + user.uid);
+        if(errBox) errBox.innerText = "Loading Profile...";
         
-        if (userSnap.exists()) {
+        // --- RETRY LOGIC TO FIX "LOADING FOREVER" ---
+        // Sometimes Auth finishes before the Database is ready. We retry 3 times.
+        let userSnap = null;
+        let attempts = 0;
+        
+        while (attempts < 5) {
+            userSnap = await getDoc(doc(db, "users", user.uid));
+            if (userSnap.exists()) break;
+            console.log("Profile not found yet, retrying...");
+            await new Promise(r => setTimeout(r, 1000)); // Wait 1 second
+            attempts++;
+        }
+
+        if (userSnap && userSnap.exists()) {
+            // SUCCESS
+            currentUser = user;
             const data = userSnap.data();
-            document.getElementById('my-name').innerText = data.username;
-            document.getElementById('my-avatar').innerText = data.username[0].toUpperCase();
             
-            // Show Admin Button if admin
-            if (data.admin) document.getElementById('btn-open-admin').style.display = 'block';
+            // Update UI elements safely
+            const nameEl = document.getElementById('my-name');
+            const avatarEl = document.getElementById('my-avatar');
+            const adminBtn = document.getElementById('btn-open-admin');
             
-            // Switch Screens
+            if(nameEl) nameEl.innerText = data.username;
+            if(avatarEl) avatarEl.innerText = (data.username || "?")[0].toUpperCase();
+            if(adminBtn && data.admin) adminBtn.style.display = 'block';
+
+            // Hide Login, Show App
             document.getElementById('login-overlay').style.display = 'none';
             document.getElementById('app-layout').style.display = 'flex';
+            
             loadChannelList();
+        } else {
+            // FAILED TO FIND PROFILE
+            console.error("User authenticated but no profile found in Firestore.");
+            if(errBox) errBox.innerText = "Error: Profile not found. Please register again.";
+            await signOut(auth); // Force logout so they can try again
         }
     } else {
+        // LOGGED OUT
+        console.log("User is logged out");
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
     }
 });
 
-// LOGIN LOGIC
+// --- LOGIN BUTTON ---
 document.getElementById('btn-signin').addEventListener('click', () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
     const errBox = document.getElementById('login-error');
-    
-    if (!u || !p) { errBox.innerText = "Please fill all fields"; return; }
-    errBox.innerText = "Signing in...";
+
+    if (!u || !p) { errBox.innerText = "Fill in all fields"; return; }
+    errBox.innerText = "Authenticating...";
 
     signInWithEmailAndPassword(auth, `${u}@salmon.com`, p)
         .catch((error) => {
-            errBox.innerText = "Error: " + error.message.replace("Firebase: ", "");
+            console.error(error);
+            // Clean up error message
+            let msg = error.message.replace("Firebase: ", "").replace("auth/", "");
+            errBox.innerText = "Login Failed: " + msg;
         });
 });
 
-// REGISTER LOGIC
+// --- REGISTER BUTTON ---
 document.getElementById('btn-register').addEventListener('click', async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
     const errBox = document.getElementById('login-error');
 
-    if (!u || !p) { errBox.innerText = "Please fill all fields"; return; }
-    errBox.innerText = "Creating account...";
+    if (!u || !p) { errBox.innerText = "Fill in all fields"; return; }
+    errBox.innerText = "Creating Account...";
 
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        // Create the user profile in Database
+        console.log("Account created on Auth Server.");
+        
+        errBox.innerText = "Setting up Database...";
+        
+        // CRITICAL: Wait for this to finish before the Auth Listener tries to read it
         await setDoc(doc(db, "users", res.user.uid), {
             username: u,
             verified: false,
             admin: false
         });
-        errBox.innerText = "Success! Logging in...";
+        
+        console.log("Database Profile Created.");
+        errBox.innerText = "Success! Entering...";
+        
     } catch (error) {
-        errBox.innerText = "Error: " + error.message.replace("Firebase: ", "");
+        console.error(error);
+        let msg = error.message.replace("Firebase: ", "").replace("auth/", "");
+        errBox.innerText = "Signup Failed: " + msg;
     }
 });
 
-document.getElementById('btn-logout').addEventListener('click', () => signOut(auth));
+document.getElementById('btn-logout').addEventListener('click', () => {
+    // Reset state
+    currentUser = null;
+    activeChatId = null;
+    if(msgUnsub) msgUnsub();
+    signOut(auth).then(() => location.reload()); // Refresh page to clear cache
+});
 
-// --- CHAT LOGIC ---
+// --- CHAT FUNCTIONS ---
 function loadChannelList() {
     const q = query(collection(db, "conversations"), orderBy("lastUpdated", "desc"));
     onSnapshot(q, (snapshot) => {
         const list = document.getElementById('channel-list');
+        if(!list) return;
         list.innerHTML = "";
         snapshot.forEach(docSnap => {
             const data = docSnap.data();
@@ -106,29 +152,24 @@ function loadChannelList() {
 }
 
 async function openChat(chatId, chatName) {
-    if (msgUnsub) msgUnsub(); // Stop listening to old chat
+    if (msgUnsub) msgUnsub();
     activeChatId = chatId;
     
-    // UI Updates
     document.getElementById('chat-title').innerText = `# ${chatName}`;
     const inputArea = document.getElementById('input-area');
-    const typeStatus = document.getElementById('typing-status');
     
     // Check Admin Permissions for Announcements
     const userSnap = await getDoc(doc(db, "users", currentUser.uid));
-    const isAdmin = userSnap.data().admin;
+    const isAdmin = userSnap.data()?.admin || false;
     
     if (chatName.toLowerCase() === 'announcements' && !isAdmin) {
         inputArea.style.display = 'none';
     } else {
         inputArea.style.display = 'block';
-        typeStatus.innerText = "";
     }
 
-    // Refresh Member List
     updateMembers(chatId);
 
-    // Load Messages
     const q = query(collection(db, "conversations", chatId, "messages"), orderBy("timestamp", "asc"));
     msgUnsub = onSnapshot(q, (snapshot) => {
         const box = document.getElementById('messages-box');
@@ -138,31 +179,26 @@ async function openChat(chatId, chatName) {
             const m = msgDoc.data();
             const isMe = m.senderId === currentUser.uid;
             
-            // Render Message
             const row = document.createElement('div');
             row.className = `msg-row ${isMe ? 'me' : 'them'}`;
             
-            // Only fetch verification status if it's NOT me
-            let badgeHtml = '';
+            // Only add badge if not me
             if (!isMe) {
-                 // In a real app we would cache this to avoid reads, but for now fetch it
                  getDoc(doc(db, "users", m.senderId)).then(s => {
                      if(s.exists() && s.data().verified) {
-                         row.querySelector('.msg-meta').innerHTML += `<span class="badge"></span>`;
+                         const meta = row.querySelector('.msg-meta');
+                         if(meta) meta.innerHTML += `<span class="badge"></span>`;
                      }
                  });
             }
 
             row.innerHTML = `
-                <div class="msg-meta">
-                    ${isMe ? '' : m.senderName}
-                </div>
+                <div class="msg-meta">${isMe ? '' : m.senderName}</div>
                 <div class="bubble">${m.content}</div>
             `;
             box.appendChild(row);
         });
         
-        // Auto Scroll to bottom
         setTimeout(() => box.scrollTop = box.scrollHeight, 100);
     });
 }
@@ -172,7 +208,7 @@ async function updateMembers(chatId) {
     list.innerHTML = '<div style="padding:10px; color:gray;">Loading...</div>';
     
     const chatDoc = await getDoc(doc(db, "conversations", chatId));
-    const members = chatDoc.data().members || [];
+    const members = chatDoc.data()?.members || [];
     
     list.innerHTML = "";
     members.forEach(async (uid) => {
@@ -182,19 +218,13 @@ async function updateMembers(chatId) {
             const div = document.createElement('div');
             div.style.padding = "10px";
             div.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
-            div.innerHTML = `
-                <div style="font-size:14px; font-weight:500;">
-                    ${u.username} 
-                    ${u.verified ? '✅' : ''}
-                    ${u.admin ? '<span class="admin-tag">ADMIN</span>' : ''}
-                </div>
-            `;
+            div.innerHTML = `${u.username} ${u.verified ? '✅' : ''}`;
             list.appendChild(div);
         }
     });
 }
 
-// --- SEND MESSAGE ---
+// --- SEND & CREATE ---
 document.getElementById('btn-send').addEventListener('click', sendMessage);
 document.getElementById('msg-input').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
@@ -206,7 +236,7 @@ async function sendMessage() {
     if (!text || !activeChatId) return;
 
     const myName = document.getElementById('my-name').innerText;
-    input.value = ""; // Clear input immediately
+    input.value = ""; 
 
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text,
@@ -215,17 +245,12 @@ async function sendMessage() {
         timestamp: serverTimestamp()
     });
     
-    // Update channel list order
-    updateDoc(doc(db, "conversations", activeChatId), {
-        lastUpdated: serverTimestamp()
-    });
+    updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 }
 
-// --- NEW CHANNEL ---
 document.getElementById('btn-create').addEventListener('click', async () => {
     const name = document.getElementById('new-channel-name').value.trim();
     if (!name) return;
-    
     await addDoc(collection(db, "conversations"), {
         name: name,
         members: [currentUser.uid],
@@ -234,46 +259,6 @@ document.getElementById('btn-create').addEventListener('click', async () => {
     document.getElementById('new-channel-name').value = "";
 });
 
-// --- ADMIN DASHBOARD ---
-document.getElementById('btn-open-admin').addEventListener('click', async () => {
-    document.getElementById('admin-overlay').style.display = 'flex';
-    const list = document.getElementById('admin-list');
-    list.innerHTML = "Loading users...";
-    
-    const snap = await getDocs(collection(db, "users"));
-    list.innerHTML = "";
-    
-    snap.forEach(d => {
-        const u = d.data();
-        const div = document.createElement('div');
-        div.style.padding = "10px";
-        div.style.borderBottom = "1px solid #333";
-        div.style.display = "flex";
-        div.style.justifyContent = "space-between";
-        div.style.alignItems = "center";
-        
-        div.innerHTML = `
-            <span>${u.username}</span>
-            <button class="verify-btn" data-id="${d.id}" data-ver="${u.verified}"
-                style="background:${u.verified ? '#ef4444' : '#22c55e'}; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">
-                ${u.verified ? 'Unverify' : 'Verify'}
-            </button>
-        `;
-        list.appendChild(div);
-    });
-    
-    // Add click listeners to new buttons
-    document.querySelectorAll('.verify-btn').forEach(btn => {
-        btn.onclick = async (e) => {
-            const uid = e.target.getAttribute('data-id');
-            const isV = e.target.getAttribute('data-ver') === 'true';
-            await updateDoc(doc(db, "users", uid), { verified: !isV });
-            document.getElementById('btn-open-admin').click(); // Refresh
-        };
-    });
-});
-
-// --- TOGGLE SIDEBAR ---
 document.getElementById('btn-toggle-members').addEventListener('click', () => {
     const sb = document.getElementById('sidebar-right');
     sb.style.display = (sb.style.display === 'none' || sb.style.display === '') ? 'flex' : 'none';
