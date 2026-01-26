@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -48,7 +48,9 @@ async function openChat(id, name, members) {
     activeChatId = id;
     document.getElementById('chat-title').innerText = "# " + name;
     
-    // MOBILE FIX: Auto-close sidebar when chat opens
+    // Show Leave Button when a chat is opened
+    document.getElementById('btn-leave-chat').style.display = 'block';
+
     document.getElementById('sidebar-left').classList.add('collapsed');
     document.getElementById('sidebar-left').classList.remove('open');
 
@@ -71,7 +73,7 @@ async function openChat(id, name, members) {
 
 async function loadMembers(memberIds) {
     const list = document.getElementById('member-list');
-    if (!list) return; // Guard for mobile where list is hidden
+    if (!list) return;
     list.innerHTML = "";
     
     for (const uid of memberIds) {
@@ -85,7 +87,32 @@ async function loadMembers(memberIds) {
     }
 }
 
-// TOGGLE SIDEBAR (Works for Phone and Desktop)
+// LEAVE CHAT LOGIC
+document.getElementById('btn-leave-chat').onclick = async () => {
+    if (!activeChatId || !currentUser) return;
+
+    if (confirm("Are you sure you want to leave this chat?")) {
+        try {
+            const chatRef = doc(db, "conversations", activeChatId);
+            await updateDoc(chatRef, {
+                members: arrayRemove(currentUser.uid)
+            });
+
+            // Reset UI
+            activeChatId = null;
+            if (msgUnsub) msgUnsub();
+            document.getElementById('messages').innerHTML = "";
+            document.getElementById('chat-title').innerText = "# welcome";
+            document.getElementById('member-list').innerHTML = "";
+            document.getElementById('btn-leave-chat').style.display = 'none';
+            
+            alert("You left the conversation.");
+        } catch (e) {
+            console.error(e);
+        }
+    }
+};
+
 document.getElementById('btn-toggle-menu').onclick = () => {
     const side = document.getElementById('sidebar-left');
     if (window.innerWidth <= 768) {
@@ -102,6 +129,7 @@ document.getElementById('btn-add-user').onclick = async () => {
     if (snap.exists()) {
         await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
         alert("User added!");
+        document.getElementById('add-user-input').value = "";
     }
 };
 
@@ -117,18 +145,23 @@ document.getElementById('btn-send').onclick = async () => {
 document.getElementById('btn-login').onclick = () => {
     const u = document.getElementById('username').value.trim().toLowerCase() + "@salmon.com";
     const p = document.getElementById('password').value;
-    signInWithEmailAndPassword(auth, u, p);
+    signInWithEmailAndPassword(auth, u, p).catch(e => alert(e.message));
 };
 
 document.getElementById('btn-signup').onclick = async () => {
     const u = document.getElementById('username').value.toLowerCase().trim();
     const p = document.getElementById('password').value;
-    const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
-    await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
-    await setDoc(doc(db, "users", res.user.uid), { username: u });
+    try {
+        const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
+        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
+        await setDoc(doc(db, "users", res.user.uid), { username: u });
+    } catch (e) { alert(e.message); }
 };
 
 document.getElementById('btn-create-channel').onclick = () => {
     const n = document.getElementById('group-name').value.trim();
-    if (n) addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+    if (n) {
+        addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+        document.getElementById('group-name').value = "";
+    }
 };
