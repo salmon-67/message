@@ -18,7 +18,15 @@ const db = getFirestore(app);
 let currentUser = null, activeChatId = null, msgUnsub = null;
 const sidebar = document.getElementById('sidebar-left'), overlay = document.getElementById('menu-overlay'), msgInput = document.getElementById('msg-input');
 
-onAuthStateChanged(auth, async (user) => {
+// Sidebar Minimize/Toggle Function
+const handleToggle = () => {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('active');
+};
+document.getElementById('btn-toggle-menu').onclick = handleToggle;
+overlay.onclick = handleToggle;
+
+onAuthStateChanged(auth, (user) => {
     if (user) {
         currentUser = user;
         const name = user.email.split('@')[0];
@@ -33,9 +41,6 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-document.getElementById('btn-toggle-menu').onclick = () => { sidebar.classList.toggle('open'); overlay.classList.toggle('active'); };
-overlay.onclick = () => { sidebar.classList.remove('open'); overlay.classList.remove('active'); };
-
 document.getElementById('btn-login').onclick = () => {
     const u = document.getElementById('username').value.trim().toLowerCase();
     const p = document.getElementById('password').value;
@@ -47,13 +52,13 @@ document.getElementById('btn-signup').onclick = async () => {
     const p = document.getElementById('password').value;
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
         await setDoc(doc(db, "users", res.user.uid), { username: u });
     } catch (e) { alert("Signup error"); }
 };
 
 async function openChat(id, name) {
-    if (window.innerWidth <= 900) { sidebar.classList.remove('open'); overlay.classList.remove('active'); }
+    // Auto-close sidebar on mobile after selecting a channel
+    if (window.innerWidth <= 900 && sidebar.classList.contains('open')) handleToggle();
     if (msgUnsub) msgUnsub();
     activeChatId = id;
     
@@ -85,6 +90,7 @@ async function openChat(id, name) {
                 div.innerText = m.content;
             } else {
                 div.className = 'msg-container';
+                const isOwner = m.senderId === currentUser.uid;
                 div.innerHTML = `
                     <div class="msg-header">
                         <span class="msg-sender">${m.senderName}</span>
@@ -92,6 +98,7 @@ async function openChat(id, name) {
                     </div>
                     <div class="msg-content">${m.content}</div>
                     <button class="action-btn" onclick="window.reactTo('${d.id}', '🐟')">🐟 ${m.reactions?.['🐟'] || ''}</button>
+                    ${isOwner ? `<button class="action-btn delete-btn" onclick="window.deleteMsg('${d.id}')">Delete</button>` : ''}
                 `;
             }
             box.appendChild(div);
@@ -116,6 +123,10 @@ function autoLoadChannels() {
     });
 }
 
+window.deleteMsg = async (msgId) => {
+    if (confirm("Delete this message?")) await deleteDoc(doc(db, "conversations", activeChatId, "messages", msgId));
+};
+
 window.reactTo = async (msgId, emoji) => {
     const msgRef = doc(db, "conversations", activeChatId, "messages", msgId);
     const snap = await getDoc(msgRef);
@@ -129,7 +140,7 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), { 
         content, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp(), reactions: {}, type: 'user' 
     });
-    await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp(), lastMsg: content });
+    await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
     msgInput.value = "";
     msgInput.style.height = 'auto';
 };
@@ -140,13 +151,15 @@ document.getElementById('btn-create-channel').onclick = async () => {
     const n = document.getElementById('group-name').value.trim();
     if (n) {
         const dRef = await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid], lastUpdated: serverTimestamp() });
-        await addDoc(collection(db, "conversations", dRef.id, "messages"), { content: `${currentUser.email.split('@')[0]} created # ${n}`, type: 'system', timestamp: serverTimestamp() });
+        await addDoc(collection(db, "conversations", dRef.id, "messages"), { content: `${currentUser.email.split('@')[0]} created #${n}`, type: 'system', timestamp: serverTimestamp() });
         document.getElementById('group-name').value = "";
     }
 };
 
 document.getElementById('btn-leave').onclick = async () => {
     if (!confirm("Leave this channel?")) return;
+    const name = currentUser.email.split('@')[0];
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), { content: `${name} left the group`, type: 'system', timestamp: serverTimestamp() });
     await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
     location.reload();
 };
