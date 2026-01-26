@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs, deleteDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs, deleteDoc, arrayUnion, where, limit } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -20,15 +20,13 @@ let activeChatId = null;
 let msgUnsub = null;
 let typingUnsub = null;
 
-// --- AUTHENTICATION ---
+// --- AUTHENTICATION & AUTO-JOIN ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userRef = doc(db, "users", user.uid);
         let userSnap = await getDoc(userRef);
         
-        // If the user was kicked (doc deleted), force logout
         if (!userSnap.exists()) {
-            console.log("No profile found. You may have been kicked.");
             signOut(auth);
             return;
         }
@@ -37,17 +35,18 @@ onAuthStateChanged(auth, async (user) => {
         document.getElementById('my-name').innerText = currentUser.username;
         document.getElementById('my-avatar').innerText = currentUser.username[0].toUpperCase();
         
-        // Admin UI visibility
+        // UI Permissions
         if (currentUser.admin) {
             document.getElementById('btn-open-admin').style.display = 'block';
             document.getElementById('btn-group-settings').style.display = 'block';
-        } else {
-            document.getElementById('btn-open-admin').style.display = 'none';
-            document.getElementById('btn-group-settings').style.display = 'none';
         }
 
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
+        
+        // 1. Ensure Announcements exists & user is in it
+        await setupAnnouncements();
+        // 2. Load the list
         loadChannels();
     } else {
         document.getElementById('app-layout').style.display = 'none';
@@ -55,12 +54,35 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
+async function setupAnnouncements() {
+    const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
+    const snap = await getDocs(q);
+    
+    let announceId;
+    if (snap.empty) {
+        // Create it if it doesn't exist
+        const docRef = await addDoc(collection(db, "conversations"), {
+            name: "announcements",
+            lastUpdated: serverTimestamp(),
+            members: [currentUser.id],
+            typing: {}
+        });
+        announceId = docRef.id;
+    } else {
+        announceId = snap.docs[0].id;
+        // Auto-add current user to members
+        await updateDoc(doc(db, "conversations", announceId), {
+            members: arrayUnion(currentUser.id)
+        });
+    }
+}
+
 // LOGIN & REGISTER
 document.getElementById('btn-signin').onclick = () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
     signInWithEmailAndPassword(auth, `${u}@salmon.com`, p).catch(e => {
-        document.getElementById('login-error').innerText = "Login Failed: " + e.message;
+        document.getElementById('login-error').innerText = "Failed: Check credentials.";
     });
 };
 
@@ -70,10 +92,7 @@ document.getElementById('btn-register').onclick = async () => {
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
         await setDoc(doc(db, "users", res.user.uid), { 
-            username: u, 
-            verified: false, 
-            admin: false,
-            createdAt: serverTimestamp() 
+            username: u, verified: false, admin: false, createdAt: serverTimestamp() 
         });
     } catch (e) { document.getElementById('login-error').innerText = e.message; }
 };
@@ -102,10 +121,14 @@ async function openChat(id, name) {
     activeChatId = id;
     document.getElementById('chat-title').innerText = `# ${name}`;
     
-    // Only admins can message in announcements
-    document.getElementById('input-area').style.display = (name.toLowerCase() === 'announcements' && !currentUser.admin) ? 'none' : 'block';
+    // --- LOCKDOWN ANNOUNCEMENTS ---
+    const isAnnounce = name.toLowerCase() === 'announcements';
+    if (isAnnounce && !currentUser.admin) {
+        document.getElementById('input-area').style.display = 'none';
+    } else {
+        document.getElementById('input-area').style.display = 'block';
+    }
     
-    await updateDoc(doc(db, "conversations", id), { members: arrayUnion(currentUser.id) });
     updateMembers(id);
     listenTyping(id);
 
@@ -121,6 +144,7 @@ async function openChat(id, name) {
                 <div class="msg-meta">${m.senderName}</div>
                 <div class="bubble">${m.content}</div>
             `;
+            // Admin can delete any message
             if (currentUser.admin) {
                 const del = document.createElement('button');
                 del.className = "delete-btn"; del.innerText = "Delete";
@@ -174,13 +198,13 @@ async function sendMessage() {
 document.getElementById('btn-open-admin').onclick = async () => {
     document.getElementById('admin-overlay').style.display = 'flex';
     const list = document.getElementById('admin-user-list');
-    list.innerHTML = "Loading Users...";
+    list.innerHTML = "Loading...";
     const snap = await getDocs(collection(db, "users"));
     list.innerHTML = "";
     
     snap.forEach(d => {
         const u = d.data();
-        if (d.id === currentUser.id) return; // Can't kick yourself
+        if (d.id === currentUser.id) return;
         
         const row = document.createElement('div');
         row.style = "padding:15px; border-bottom:1px solid #333; display:flex; flex-direction:column; gap:10px;";
@@ -200,14 +224,12 @@ document.getElementById('btn-open-admin').onclick = async () => {
         list.appendChild(row);
     });
 
-    // Verify Logic
     document.querySelectorAll('.verify-toggle').forEach(b => b.onclick = async (e) => {
         const isV = e.target.dataset.v === 'true';
         await updateDoc(doc(db, "users", e.target.dataset.id), { verified: !isV });
         document.getElementById('btn-open-admin').onclick();
     });
 
-    // Rename Logic
     document.querySelectorAll('.change-name-btn').forEach(b => b.onclick = async (e) => {
         const newName = e.target.previousElementSibling.value;
         if (newName) {
@@ -216,9 +238,8 @@ document.getElementById('btn-open-admin').onclick = async () => {
         }
     });
 
-    // Kick Logic
     document.querySelectorAll('.kick-btn').forEach(b => b.onclick = async (e) => {
-        if (confirm("Permanently delete this user's profile and kick them?")) {
+        if (confirm("Kick user?")) {
             await deleteDoc(doc(db, "users", e.target.dataset.id));
             document.getElementById('btn-open-admin').onclick();
         }
@@ -239,7 +260,7 @@ document.getElementById('btn-save-channel').onclick = async () => {
     }
 };
 
-// --- HELPERS ---
+// --- MEMBERS ---
 async function updateMembers(id) {
     const snap = await getDoc(doc(db, "conversations", id));
     const mems = snap.data().members || [];
@@ -260,10 +281,7 @@ document.getElementById('btn-create').onclick = async () => {
     const n = document.getElementById('new-channel-name').value.trim();
     if (n) {
         await addDoc(collection(db, "conversations"), { 
-            name: n, 
-            lastUpdated: serverTimestamp(), 
-            members: [currentUser.id],
-            typing: {}
+            name: n, lastUpdated: serverTimestamp(), members: [currentUser.id], typing: {}
         });
         document.getElementById('new-channel-name').value = "";
     }
