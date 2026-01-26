@@ -18,17 +18,9 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
+let memberUnsub = null; // New listener for members
 
-// Helper to catch common setup errors
-const handleErr = (e) => {
-    console.error(e);
-    if (e.code === 'auth/operation-not-allowed') {
-        alert("Firebase Error: You must enable 'Email/Password' in the Firebase Auth Console.");
-    } else {
-        alert("Firebase error");
-    }
-};
-
+// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
@@ -37,43 +29,15 @@ onAuthStateChanged(auth, async (user) => {
         document.getElementById('user-badge').innerText = name[0].toUpperCase();
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
-        loadChannels();
+        autoLoadChannels(); // Start live channel listener
     } else {
         document.getElementById('auth-container').style.display = 'block';
         document.getElementById('app-container').style.display = 'none';
     }
 });
 
-// LOG IN
-document.getElementById('btn-login').onclick = async () => {
-    const u = document.getElementById('username').value.trim().toLowerCase();
-    const p = document.getElementById('password').value;
-    if (!u || !p) return;
-    
-    // Auto-adds @salmon.com
-    const email = u.includes('@') ? u : `${u}@salmon.com`;
-    signInWithEmailAndPassword(auth, email, p).catch(handleErr);
-};
-
-// SIGN UP
-document.getElementById('btn-signup').onclick = async () => {
-    const u = document.getElementById('username').value.trim().toLowerCase();
-    const p = document.getElementById('password').value;
-    if (!u || p.length < 6) return alert("Min 6 chars for password");
-
-    const email = `${u}@salmon.com`;
-    try {
-        const res = await createUserWithEmailAndPassword(auth, email, p);
-        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
-        await setDoc(doc(db, "users", res.user.uid), { username: u });
-    } catch (e) { handleErr(e); }
-};
-
-document.getElementById('btn-logout').onclick = () => signOut(auth);
-
-// --- CHAT FUNCTIONS ---
-
-function loadChannels() {
+// --- AUTO-LOAD CHANNELS (Left Sidebar) ---
+function autoLoadChannels() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
     onSnapshot(q, (snap) => {
         const list = document.getElementById('chat-list');
@@ -82,24 +46,27 @@ function loadChannels() {
             const item = document.createElement('div');
             item.className = `channel-item ${activeChatId === d.id ? 'active' : ''}`;
             item.innerHTML = `<span># ${d.data().name}</span>`;
-            item.onclick = () => openChat(d.id, d.data().name, d.data().members);
+            item.onclick = () => openChat(d.id, d.data().name);
             list.appendChild(item);
         });
     });
 }
 
-async function openChat(id, name, members) {
+// --- OPEN CHAT & AUTO-LOAD MESSAGES/MEMBERS ---
+async function openChat(id, name) {
     if (msgUnsub) msgUnsub();
+    if (memberUnsub) memberUnsub(); // Kill old member listener
     activeChatId = id;
+    
     document.getElementById('welcome-view').style.display = 'none';
     document.getElementById('messages').style.display = 'flex';
     document.getElementById('input-area').style.display = 'block';
     document.getElementById('btn-leave-chat').style.display = 'block';
-    document.getElementById('chat-title').innerHTML = `# ${name}`;
+    document.getElementById('chat-title').innerText = `# ${name}`;
 
-    loadMembers(members);
-    const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    msgUnsub = onSnapshot(q, (snap) => {
+    // 1. LIVE MESSAGE LISTENER
+    const qMsg = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
+    msgUnsub = onSnapshot(qMsg, (snap) => {
         const box = document.getElementById('messages');
         box.innerHTML = "";
         snap.forEach(d => {
@@ -109,23 +76,43 @@ async function openChat(id, name, members) {
             div.innerHTML = `<span class="msg-sender">${m.senderName}</span><span class="msg-content">${m.content}</span>`;
             box.appendChild(div);
         });
-        box.scrollTop = box.scrollHeight;
+        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+    });
+
+    // 2. LIVE MEMBER LISTENER (Right Sidebar)
+    memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
+        const list = document.getElementById('member-list');
+        list.innerHTML = "";
+        const memberIds = docSnap.data()?.members || [];
+        
+        for (const uid of memberIds) {
+            const userSnap = await getDoc(doc(db, "users", uid));
+            if (userSnap.exists()) {
+                const div = document.createElement('div');
+                div.style = "padding:4px 0; font-size:13px; display:flex; align-items:center; gap:8px;";
+                div.innerHTML = `<div style="width:6px; height:6px; background:var(--discord-green); border-radius:50%"></div> ${userSnap.data().username}`;
+                list.appendChild(div);
+            }
+        }
     });
 }
 
-async function loadMembers(memberIds) {
-    const list = document.getElementById('member-list');
-    list.innerHTML = "";
-    for (const uid of memberIds) {
-        const snap = await getDoc(doc(db, "users", uid));
-        if (snap.exists()) {
-            const div = document.createElement('div');
-            div.style = "padding:4px 0; font-size:13px; display:flex; align-items:center; gap:8px;";
-            div.innerHTML = `<div style="width:6px; height:6px; background:var(--discord-green); border-radius:50%"></div> ${snap.data().username}`;
-            list.appendChild(div);
-        }
-    }
-}
+// --- ACTIONS (Login, Signup, Send) ---
+document.getElementById('btn-login').onclick = () => {
+    const u = document.getElementById('username').value.trim().toLowerCase();
+    const p = document.getElementById('password').value;
+    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p).catch(() => alert("Firebase error"));
+};
+
+document.getElementById('btn-signup').onclick = async () => {
+    const u = document.getElementById('username').value.trim().toLowerCase();
+    const p = document.getElementById('password').value;
+    try {
+        const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
+        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
+        await setDoc(doc(db, "users", res.user.uid), { username: u });
+    } catch (e) { alert("Firebase error"); }
+};
 
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
@@ -145,20 +132,15 @@ document.getElementById('btn-create-channel').onclick = async () => {
 };
 
 document.getElementById('btn-add-user').onclick = async () => {
-    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
+    const nameInput = document.getElementById('add-user-input');
+    const name = nameInput.value.toLowerCase().trim();
     if (!name || !activeChatId) return;
     const snap = await getDoc(doc(db, "usernames", name));
     if (snap.exists()) {
         await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-        document.getElementById('add-user-input').value = "";
+        nameInput.value = "";
     } else { alert("User not found"); }
 };
 
-document.getElementById('btn-leave-chat').onclick = async () => {
-    if (confirm("Leave?")) {
-        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
-        location.reload();
-    }
-};
-
+document.getElementById('btn-logout').onclick = () => signOut(auth);
 document.getElementById('btn-toggle-menu').onclick = () => document.getElementById('sidebar-left').classList.toggle('open');
