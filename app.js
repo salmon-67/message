@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, deleteDoc, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, getDocs, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -16,27 +16,16 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 let currentUser = null, activeChatId = null, msgUnsub = null, typingUnsub = null;
-const sidebarL = document.getElementById('sidebar-left'), sidebarR = document.getElementById('sidebar-right'), overlay = document.getElementById('menu-overlay'), msgInput = document.getElementById('msg-input');
-
-// --- THEME ---
-const themeBtn = document.getElementById('theme-btn');
-themeBtn.onclick = () => {
-    document.body.classList.toggle('light-theme');
-    localStorage.setItem('salmon-theme', document.body.classList.contains('light-theme') ? 'light' : 'dark');
-};
-if (localStorage.getItem('salmon-theme') === 'light') document.body.classList.add('light-theme');
-
-// --- SIDEBARS ---
-document.getElementById('btn-toggle-menu').onclick = () => { sidebarL.classList.toggle('open'); overlay.classList.toggle('active'); };
-document.getElementById('btn-toggle-members').onclick = () => { sidebarR.classList.toggle('open'); };
-overlay.onclick = () => { sidebarL.classList.remove('open'); overlay.classList.remove('active'); };
+const msgInput = document.getElementById('msg-input');
 
 // --- AUTH ---
-onAuthStateChanged(auth, (user) => {
+onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
+        const uDoc = await getDoc(doc(db, "users", user.uid));
+        if (uDoc.data()?.admin) document.getElementById('btn-open-admin').style.display = 'block';
+        
         document.getElementById('user-display-name').innerText = user.email.split('@')[0];
-        document.getElementById('user-badge').innerText = user.email[0].toUpperCase();
         document.getElementById('auth-container').style.display = 'none';
         document.getElementById('app-container').style.display = 'flex';
         autoLoadChannels();
@@ -46,99 +35,87 @@ onAuthStateChanged(auth, (user) => {
     }
 });
 
-document.getElementById('btn-login').onclick = () => {
-    const u = document.getElementById('username').value.trim().toLowerCase(), p = document.getElementById('password').value;
-    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p).catch(() => alert("Login Error"));
-};
-
-document.getElementById('btn-signup').onclick = async () => {
-    const u = document.getElementById('username').value.trim().toLowerCase(), p = document.getElementById('password').value;
-    try {
-        const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        await setDoc(doc(db, "users", res.user.uid), { username: u, verified: false });
-    } catch (e) { alert("Signup Error"); }
-};
-
-// --- CORE CHAT ---
+// --- CORE CHAT & ANNOUNCEMENTS ---
 async function openChat(id, name) {
-    if (window.innerWidth <= 900) { sidebarL.classList.remove('open'); overlay.classList.remove('active'); }
-    if (msgUnsub) msgUnsub(); if (typingUnsub) typingUnsub();
+    if (msgUnsub) msgUnsub();
     activeChatId = id;
     
     document.getElementById('welcome-view').style.display = 'none';
     document.getElementById('messages').style.display = 'flex';
-    document.getElementById('input-area').style.display = 'block';
-    document.getElementById('btn-leave').style.display = 'block';
     document.getElementById('chat-title').innerText = `# ${name}`;
 
-    // Watch Members
-    onSnapshot(doc(db, "conversations", id), async (docSnap) => {
-        const members = docSnap.data().members, list = document.getElementById('member-list');
-        list.innerHTML = "";
-        for (const uid of members) {
-            const uData = (await getDoc(doc(db, "users", uid))).data();
-            const badge = uData?.verified ? `<span class="verified-badge"><img src="https://i.ibb.co/bc6596/image.png"></span>` : '';
-            list.innerHTML += `<div class="member-item">${uData?.username || 'User'}${badge}</div>`;
-        }
-    });
+    const uData = (await getDoc(doc(db, "users", currentUser.uid))).data();
+    const isRestricted = name.toLowerCase() === "announcements" && !uData.admin;
+    document.getElementById('input-area').style.display = isRestricted ? 'none' : 'block';
+    if (isRestricted) document.getElementById('typing-box').innerText = "Announcements are read-only.";
 
-    // Watch Typing
-    typingUnsub = onSnapshot(collection(db, "conversations", id, "typing"), (snap) => {
-        const typers = [];
-        snap.forEach(d => { if(d.data().isTyping && d.id !== currentUser.uid) typers.push(d.data().name); });
-        document.getElementById('typing-box').innerText = typers.length > 0 ? `${typers.join(', ')} is typing...` : '';
-    });
-
-    // Watch Messages
+    // Load Messages
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), async (snap) => {
         const box = document.getElementById('messages'); box.innerHTML = "";
         for (const d of snap.docs) {
             const m = d.data(); if (!m.timestamp) continue;
-            const uData = (await getDoc(doc(db, "users", m.senderId))).data();
-            const badge = uData?.verified ? `<span class="verified-badge"><img src="https://i.ibb.co/bc6596/image.png"></span>` : '';
+            const sData = (await getDoc(doc(db, "users", m.senderId))).data();
+            const badge = sData?.verified ? `<span class="verified-badge"><img src="https://i.ibb.co/bc6596/image.png"></span>` : '';
+            
             const div = document.createElement('div');
             div.className = m.type === 'system' ? 'msg-system' : 'msg-container';
             div.innerHTML = m.type === 'system' ? m.content : `
                 <div class="msg-sender">${m.senderName}${badge}</div>
                 <div class="msg-content">${m.content}</div>
-                <button class="action-btn" onclick="window.reactTo('${d.id}', '🐟')">🐟 ${m.reactions?.['🐟'] || 0}</button>
-                ${m.senderId === currentUser.uid ? `<button class="action-btn" style="color:var(--danger)" onclick="window.deleteMsg('${d.id}')">Delete</button>` : ''}
+                <div><button class="action-btn" onclick="window.reactTo('${d.id}', '🐟')">🐟 ${m.reactions?.['🐟'] || 0}</button></div>
             `;
             box.appendChild(div);
         }
         box.scrollTop = box.scrollHeight;
     });
+
+    // Populate Member Sidebar
+    const cSnap = await getDoc(doc(db, "conversations", id));
+    const mList = document.getElementById('member-list'); mList.innerHTML = "";
+    for (const uid of cSnap.data().members) {
+        const mData = (await getDoc(doc(db, "users", uid))).data();
+        mList.innerHTML += `<div class="member-card" style="font-size:13px; font-weight:600;">${mData.username} ${mData.verified ? '⭐' : ''}</div>`;
+    }
 }
 
-// --- INPUT & ACTIONS ---
-let tTimer;
-msgInput.oninput = () => {
-    msgInput.style.height = 'auto'; msgInput.style.height = msgInput.scrollHeight + 'px';
-    if (activeChatId) {
-        setDoc(doc(db, "conversations", activeChatId, "typing", currentUser.uid), { name: currentUser.email.split('@')[0], isTyping: true });
-        clearTimeout(tTimer);
-        tTimer = setTimeout(() => setDoc(doc(db, "conversations", activeChatId, "typing", currentUser.uid), { isTyping: false }), 2000);
-    }
+// --- ADMIN DASHBOARD LOGIC ---
+document.getElementById('btn-open-admin').onclick = async () => {
+    const dash = document.getElementById('admin-dashboard');
+    const uList = document.getElementById('admin-user-list');
+    dash.style.display = 'flex';
+    uList.innerHTML = "Loading Users...";
+    
+    const usersSnap = await getDocs(collection(db, "users"));
+    uList.innerHTML = "";
+    usersSnap.forEach(uDoc => {
+        const u = uDoc.data();
+        const div = document.createElement('div');
+        div.style = "padding:10px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;";
+        div.innerHTML = `
+            <span>${u.username} ${u.verified ? '✅' : ''}</span>
+            <button onclick="window.toggleVerify('${uDoc.id}', ${u.verified})" style="background:var(--accent); color:white; border:none; padding:5px 10px; border-radius:5px; font-size:10px; cursor:pointer;">
+                ${u.verified ? 'Unverify' : 'Verify'}
+            </button>
+        `;
+        uList.appendChild(div);
+    });
 };
 
+window.toggleVerify = async (uid, currentStatus) => {
+    await updateDoc(doc(db, "users", uid), { verified: !currentStatus });
+    document.getElementById('btn-open-admin').click(); // Refresh list
+};
+
+// --- REST OF UI LOGIC ---
 document.getElementById('btn-send').onclick = async () => {
-    const c = msgInput.value.trim(); if (!c || !activeChatId) return;
+    const c = msgInput.value.trim(); if (!c) return;
     await addDoc(collection(db, "conversations", activeChatId, "messages"), { content: c, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp(), reactions: {}, type: 'user' });
-    await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
-    msgInput.value = ""; msgInput.style.height = 'auto';
-    setDoc(doc(db, "conversations", activeChatId, "typing", currentUser.uid), { isTyping: false });
-};
-
-window.deleteMsg = (mid) => confirm("Delete?") && deleteDoc(doc(db, "conversations", activeChatId, "messages", mid));
-window.reactTo = async (mid, e) => {
-    const ref = doc(db, "conversations", activeChatId, "messages", mid), s = await getDoc(ref);
-    await updateDoc(ref, { [`reactions.${e}`]: (s.data().reactions?.[e] || 0) + 1 });
+    msgInput.value = "";
 };
 
 document.getElementById('btn-create-channel').onclick = async () => {
     const n = document.getElementById('group-name').value.trim(); if (!n) return;
-    const d = await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid], lastUpdated: serverTimestamp() });
-    await addDoc(collection(db, "conversations", d.id, "messages"), { content: `Channel #${n} created`, type: 'system', timestamp: serverTimestamp() });
+    await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid], lastUpdated: serverTimestamp() });
     document.getElementById('group-name').value = "";
 };
 
@@ -155,4 +132,20 @@ function autoLoadChannels() {
     });
 }
 
+window.reactTo = async (mid, e) => {
+    const ref = doc(db, "conversations", activeChatId, "messages", mid), s = await getDoc(ref);
+    await updateDoc(ref, { [`reactions.${e}`]: (s.data().reactions?.[e] || 0) + 1 });
+};
+
+document.getElementById('btn-toggle-members').onclick = () => {
+    const sr = document.getElementById('sidebar-right');
+    sr.style.display = sr.style.display === 'none' ? 'flex' : 'none';
+};
+
+document.getElementById('btn-login').onclick = () => signInWithEmailAndPassword(auth, `${document.getElementById('username').value}@salmon.com`, document.getElementById('password').value);
+document.getElementById('btn-signup').onclick = async () => {
+    const u = document.getElementById('username').value;
+    const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, document.getElementById('password').value);
+    await setDoc(doc(db, "users", res.user.uid), { username: u, verified: false, admin: false });
+};
 document.getElementById('btn-logout').onclick = () => signOut(auth).then(() => location.reload());
