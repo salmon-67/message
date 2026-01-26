@@ -1,8 +1,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIGURATION ---
+// --- CONFIG ---
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
     authDomain: "message-salmon.firebaseapp.com",
@@ -25,87 +25,108 @@ let msgUnsub = null;
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         currentUser = user;
-        document.getElementById('auth-overlay').style.display = 'none';
-        document.getElementById('app-layout').style.display = 'flex'; // Activates Flexbox Layout
+        // Load User Profile
+        const userRef = doc(db, "users", user.uid);
+        const userSnap = await getDoc(userRef);
         
-        // Load User Info
-        const uDoc = await getDoc(doc(db, "users", user.uid));
-        if (uDoc.exists()) {
-            const data = uDoc.data();
-            document.getElementById('my-username').innerText = data.username;
+        if (userSnap.exists()) {
+            const data = userSnap.data();
+            document.getElementById('my-name').innerText = data.username;
             document.getElementById('my-avatar').innerText = data.username[0].toUpperCase();
             
-            if (data.admin) {
-                document.getElementById('btn-admin-tools').style.display = 'block';
-            }
+            // Show Admin Button if admin
+            if (data.admin) document.getElementById('btn-open-admin').style.display = 'block';
+            
+            // Switch Screens
+            document.getElementById('login-overlay').style.display = 'none';
+            document.getElementById('app-layout').style.display = 'flex';
+            loadChannelList();
         }
-        
-        loadChannels();
     } else {
-        document.getElementById('auth-overlay').style.display = 'flex';
+        document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
     }
 });
 
-document.getElementById('btn-login').addEventListener('click', () => {
-    const u = document.getElementById('auth-username').value.trim();
-    const p = document.getElementById('auth-password').value;
-    if(!u || !p) return alert("Please fill in all fields");
-    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p).catch(e => alert(e.message));
+// LOGIN LOGIC
+document.getElementById('btn-signin').addEventListener('click', () => {
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value;
+    const errBox = document.getElementById('login-error');
+    
+    if (!u || !p) { errBox.innerText = "Please fill all fields"; return; }
+    errBox.innerText = "Signing in...";
+
+    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p)
+        .catch((error) => {
+            errBox.innerText = "Error: " + error.message.replace("Firebase: ", "");
+        });
 });
 
+// REGISTER LOGIC
 document.getElementById('btn-register').addEventListener('click', async () => {
-    const u = document.getElementById('auth-username').value.trim();
-    const p = document.getElementById('auth-password').value;
-    if(!u || !p) return alert("Please fill in all fields");
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value;
+    const errBox = document.getElementById('login-error');
+
+    if (!u || !p) { errBox.innerText = "Please fill all fields"; return; }
+    errBox.innerText = "Creating account...";
+
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        // Create user profile in Firestore immediately
-        await setDoc(doc(db, "users", res.user.uid), { 
-            username: u, 
-            verified: false, 
-            admin: false 
+        // Create the user profile in Database
+        await setDoc(doc(db, "users", res.user.uid), {
+            username: u,
+            verified: false,
+            admin: false
         });
-    } catch (e) { alert(e.message); }
+        errBox.innerText = "Success! Logging in...";
+    } catch (error) {
+        errBox.innerText = "Error: " + error.message.replace("Firebase: ", "");
+    }
 });
 
 document.getElementById('btn-logout').addEventListener('click', () => signOut(auth));
 
 // --- CHAT LOGIC ---
-function loadChannels() {
-    onSnapshot(query(collection(db, "conversations"), orderBy("lastUpdated", "desc")), (snapshot) => {
+function loadChannelList() {
+    const q = query(collection(db, "conversations"), orderBy("lastUpdated", "desc"));
+    onSnapshot(q, (snapshot) => {
         const list = document.getElementById('channel-list');
         list.innerHTML = "";
         snapshot.forEach(docSnap => {
             const data = docSnap.data();
-            const btn = document.createElement('div');
-            btn.className = `channel-btn ${activeChatId === docSnap.id ? 'active' : ''}`;
-            btn.innerText = `# ${data.name}`;
-            btn.onclick = () => openChat(docSnap.id, data.name);
-            list.appendChild(btn);
+            const div = document.createElement('div');
+            div.className = `channel-btn ${activeChatId === docSnap.id ? 'active' : ''}`;
+            div.innerText = `# ${data.name}`;
+            div.onclick = () => openChat(docSnap.id, data.name);
+            list.appendChild(div);
         });
     });
 }
 
 async function openChat(chatId, chatName) {
-    if (msgUnsub) msgUnsub(); // Detach previous listener
+    if (msgUnsub) msgUnsub(); // Stop listening to old chat
     activeChatId = chatId;
     
-    // Update Header & Active State
-    document.getElementById('current-channel-name').innerText = `# ${chatName}`;
-    document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
-    // (Optional: Re-highlight active button here if strictly needed)
-
-    // Check Restrictions (Announcements)
-    const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-    const isAdmin = userDoc.data()?.admin;
-    const isRestricted = chatName.toLowerCase() === 'announcements' && !isAdmin;
+    // UI Updates
+    document.getElementById('chat-title').innerText = `# ${chatName}`;
+    const inputArea = document.getElementById('input-area');
+    const typeStatus = document.getElementById('typing-status');
     
-    const inputZone = document.getElementById('input-zone');
-    inputZone.style.display = isRestricted ? 'none' : 'block';
+    // Check Admin Permissions for Announcements
+    const userSnap = await getDoc(doc(db, "users", currentUser.uid));
+    const isAdmin = userSnap.data().admin;
+    
+    if (chatName.toLowerCase() === 'announcements' && !isAdmin) {
+        inputArea.style.display = 'none';
+    } else {
+        inputArea.style.display = 'block';
+        typeStatus.innerText = "";
+    }
 
-    // Load Members (Realtime for this chat)
-    updateMemberList(chatId);
+    // Refresh Member List
+    updateMembers(chatId);
 
     // Load Messages
     const q = query(collection(db, "conversations", chatId, "messages"), orderBy("timestamp", "asc"));
@@ -117,144 +138,143 @@ async function openChat(chatId, chatName) {
             const m = msgDoc.data();
             const isMe = m.senderId === currentUser.uid;
             
-            // Get sender verification status
-            // Note: In a massive app, you'd cache this. For this scale, fetching is fine.
-            let isVerified = false;
-            if(!isMe) {
-                const sDoc = await getDoc(doc(db, "users", m.senderId));
-                isVerified = sDoc.exists() && sDoc.data().verified;
+            // Render Message
+            const row = document.createElement('div');
+            row.className = `msg-row ${isMe ? 'me' : 'them'}`;
+            
+            // Only fetch verification status if it's NOT me
+            let badgeHtml = '';
+            if (!isMe) {
+                 // In a real app we would cache this to avoid reads, but for now fetch it
+                 getDoc(doc(db, "users", m.senderId)).then(s => {
+                     if(s.exists() && s.data().verified) {
+                         row.querySelector('.msg-meta').innerHTML += `<span class="badge"></span>`;
+                     }
+                 });
             }
 
-            const div = document.createElement('div');
-            div.className = `msg-wrapper ${isMe ? 'me' : 'them'}`;
-            
-            div.innerHTML = `
-                ${!isMe ? `<div class="msg-info">
-                    ${m.senderName} ${isVerified ? '<span class="badge-verified">✔</span>' : ''}
-                </div>` : ''}
-                <div class="msg-bubble">${m.content}</div>
+            row.innerHTML = `
+                <div class="msg-meta">
+                    ${isMe ? '' : m.senderName}
+                </div>
+                <div class="bubble">${m.content}</div>
             `;
-            box.appendChild(div);
+            box.appendChild(row);
         });
         
-        // Auto Scroll
+        // Auto Scroll to bottom
         setTimeout(() => box.scrollTop = box.scrollHeight, 100);
     });
 }
 
-async function updateMemberList(chatId) {
+async function updateMembers(chatId) {
     const list = document.getElementById('member-list');
-    list.innerHTML = '<div style="padding:10px; color:grey;">Loading...</div>';
+    list.innerHTML = '<div style="padding:10px; color:gray;">Loading...</div>';
     
     const chatDoc = await getDoc(doc(db, "conversations", chatId));
-    if(!chatDoc.exists()) return;
-    
     const members = chatDoc.data().members || [];
-    list.innerHTML = ""; // Clear loader
     
-    for(const uid of members) {
+    list.innerHTML = "";
+    members.forEach(async (uid) => {
         const uDoc = await getDoc(doc(db, "users", uid));
-        if(uDoc.exists()) {
+        if (uDoc.exists()) {
             const u = uDoc.data();
             const div = document.createElement('div');
-            div.style.padding = "8px 12px";
-            div.style.display = "flex";
-            div.style.alignItems = "center";
-            div.style.gap = "8px";
+            div.style.padding = "10px";
+            div.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
             div.innerHTML = `
-                <div style="width:8px; height:8px; background:${u.verified ? 'var(--accent)' : 'gray'}; border-radius:50%;"></div>
-                <span style="font-size:14px;">${u.username}</span>
-                ${u.admin ? '<span style="font-size:10px; color:var(--danger); border:1px solid var(--danger); padding:1px 4px; border-radius:4px;">ADMIN</span>' : ''}
+                <div style="font-size:14px; font-weight:500;">
+                    ${u.username} 
+                    ${u.verified ? '✅' : ''}
+                    ${u.admin ? '<span class="admin-tag">ADMIN</span>' : ''}
+                </div>
             `;
             list.appendChild(div);
         }
-    }
+    });
 }
 
-// --- SENDING MESSAGES ---
-document.getElementById('send-btn').addEventListener('click', sendMessage);
-document.getElementById('message-input').addEventListener('keypress', (e) => {
-    if(e.key === 'Enter') sendMessage();
+// --- SEND MESSAGE ---
+document.getElementById('btn-send').addEventListener('click', sendMessage);
+document.getElementById('msg-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') sendMessage();
 });
 
 async function sendMessage() {
-    const input = document.getElementById('message-input');
+    const input = document.getElementById('msg-input');
     const text = input.value.trim();
-    if(!text || !activeChatId) return;
-    
-    const userDoc = await getDoc(doc(db, "users", currentUser.uid));
-    const username = userDoc.data().username;
+    if (!text || !activeChatId) return;
 
-    input.value = "";
-    
+    const myName = document.getElementById('my-name').innerText;
+    input.value = ""; // Clear input immediately
+
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text,
         senderId: currentUser.uid,
-        senderName: username,
-        timestamp: serverTimestamp(),
-        type: "text"
+        senderName: myName,
+        timestamp: serverTimestamp()
     });
     
-    // Update Channel timestamp
-    await updateDoc(doc(db, "conversations", activeChatId), {
+    // Update channel list order
+    updateDoc(doc(db, "conversations", activeChatId), {
         lastUpdated: serverTimestamp()
     });
 }
 
-// --- CREATING CHANNELS ---
-document.getElementById('btn-create-channel').addEventListener('click', async () => {
+// --- NEW CHANNEL ---
+document.getElementById('btn-create').addEventListener('click', async () => {
     const name = document.getElementById('new-channel-name').value.trim();
-    if(!name) return;
+    if (!name) return;
     
     await addDoc(collection(db, "conversations"), {
         name: name,
-        members: [currentUser.uid], // Creator is first member
+        members: [currentUser.uid],
         lastUpdated: serverTimestamp()
     });
-    
     document.getElementById('new-channel-name').value = "";
 });
 
-// --- UI TOGGLES ---
-document.getElementById('btn-toggle-members').addEventListener('click', () => {
-    const sb = document.getElementById('sidebar-right');
-    sb.style.display = (sb.style.display === 'none' || sb.style.display === '') ? 'flex' : 'none';
-});
-
-document.getElementById('btn-mobile-menu').addEventListener('click', () => {
-    document.getElementById('sidebar-left').classList.toggle('open');
-});
-
 // --- ADMIN DASHBOARD ---
-document.getElementById('btn-admin-tools').addEventListener('click', async () => {
+document.getElementById('btn-open-admin').addEventListener('click', async () => {
     document.getElementById('admin-overlay').style.display = 'flex';
-    const list = document.getElementById('admin-user-list');
-    list.innerHTML = "Loading...";
+    const list = document.getElementById('admin-list');
+    list.innerHTML = "Loading users...";
     
     const snap = await getDocs(collection(db, "users"));
     list.innerHTML = "";
     
-    snap.forEach(docSnap => {
-        const u = docSnap.data();
+    snap.forEach(d => {
+        const u = d.data();
         const div = document.createElement('div');
-        div.style = "display:flex; justify-content:space-between; padding:10px; border-bottom:1px solid #333; align-items:center;";
+        div.style.padding = "10px";
+        div.style.borderBottom = "1px solid #333";
+        div.style.display = "flex";
+        div.style.justifyContent = "space-between";
+        div.style.alignItems = "center";
+        
         div.innerHTML = `
             <span>${u.username}</span>
-            <button class="verify-btn" data-id="${docSnap.id}" data-status="${u.verified}" 
-            style="background:${u.verified ? 'var(--danger)' : 'var(--success)'}; color:white; border:none; padding:6px 12px; border-radius:6px; cursor:pointer;">
-                ${u.verified ? 'Revoke' : 'Verify'}
+            <button class="verify-btn" data-id="${d.id}" data-ver="${u.verified}"
+                style="background:${u.verified ? '#ef4444' : '#22c55e'}; color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">
+                ${u.verified ? 'Unverify' : 'Verify'}
             </button>
         `;
         list.appendChild(div);
     });
     
-    // Add listeners to new buttons
+    // Add click listeners to new buttons
     document.querySelectorAll('.verify-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
+        btn.onclick = async (e) => {
             const uid = e.target.getAttribute('data-id');
-            const currentStatus = e.target.getAttribute('data-status') === 'true';
-            await updateDoc(doc(db, "users", uid), { verified: !currentStatus });
-            document.getElementById('btn-admin-tools').click(); // Refresh list
-        });
+            const isV = e.target.getAttribute('data-ver') === 'true';
+            await updateDoc(doc(db, "users", uid), { verified: !isV });
+            document.getElementById('btn-open-admin').click(); // Refresh
+        };
     });
+});
+
+// --- TOGGLE SIDEBAR ---
+document.getElementById('btn-toggle-members').addEventListener('click', () => {
+    const sb = document.getElementById('sidebar-right');
+    sb.style.display = (sb.style.display === 'none' || sb.style.display === '') ? 'flex' : 'none';
 });
