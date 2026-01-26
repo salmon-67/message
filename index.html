@@ -29,7 +29,7 @@
         }
         .auth-input:focus { border-color: var(--discord-blue); }
 
-        /* Sidebar & Layout */
+        /* Layout */
         #sidebar-left { width: 260px; background: var(--bg-sidebar); display: flex; flex-direction: column; border-right: 1px solid #1e1f22; z-index: 1001; }
         #main-chat { flex: 1; display: flex; flex-direction: column; background: var(--bg-main); min-width: 0; position: relative; }
         #sidebar-right { width: 220px; background: var(--bg-sidebar); border-left: 1px solid #1e1f22; padding: 15px; display: flex; flex-direction: column; }
@@ -43,9 +43,14 @@
 
         /* Messages */
         .msg-container { display: flex; flex-direction: column; margin-bottom: 8px; padding: 4px 12px; border-radius: 4px; }
-        .msg-container:hover { background: rgba(255,255,255,0.02); }
         .msg-sender { font-size: 0.9rem; font-weight: 600; color: var(--discord-blue); }
         .msg-content { font-size: 0.95rem; line-height: 1.4; color: #dbdee1; word-wrap: break-word; }
+
+        /* Sidebar Channel Items */
+        .channel-item { padding: 10px 12px; margin: 2px 8px; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .channel-item:hover { background: #35373c; }
+        .channel-item.active { background: #404249; }
+        .unread-dot { display: inline-block; width: 8px; height: 8px; background: var(--discord-red); border-radius: 50%; margin-left: 5px; }
 
         /* Footer Profile */
         .user-footer { padding: 10px; background: #232428; display: flex; align-items: center; gap: 10px; border-top: 1px solid #1e1f22; }
@@ -55,13 +60,10 @@
         .input-wrapper { background: #383a40; border-radius: 8px; display: flex; padding: 12px; }
         #msg-input { background: none; border: none; flex: 1; outline: none; color: #fff; }
         
-        button { cursor: pointer; border: none; border-radius: 4px; font-weight: 500; padding: 8px 16px; }
+        button { cursor: pointer; border: none; border-radius: 4px; font-weight: 500; padding: 8px 16px; transition: opacity 0.2s; }
+        button:hover { opacity: 0.8; }
         .btn-primary { background: var(--discord-blue); }
         .btn-logout { background: none; border: 1px solid var(--discord-red); color: var(--discord-red); font-size: 11px; padding: 4px 8px; }
-        
-        .channel-item { padding: 8px 12px; margin: 2px 8px; border-radius: 4px; cursor: pointer; color: var(--text-muted); }
-        .channel-item:hover { background: #35373c; color: #fff; }
-        .channel-item.active { background: #404249; color: #fff; }
 
         @media (max-width: 768px) {
             #sidebar-right { display: none; }
@@ -85,7 +87,7 @@
             <div class="header-bar">SALMON</div>
             <div id="chat-list" style="flex:1; overflow-y:auto; padding-top:8px;"></div>
             <div style="padding:16px;">
-                <input type="text" id="group-name" class="auth-input" placeholder="New Channel" style="margin-bottom:8px;">
+                <input type="text" id="group-name" class="auth-input" placeholder="New Channel" style="margin-bottom:8px; font-size: 13px;">
                 <button id="btn-create-channel" class="btn-primary" style="width:100%; background:var(--discord-green)">Create</button>
             </div>
             <div class="user-footer">
@@ -120,7 +122,7 @@
         <aside id="sidebar-right">
             <div style="font-size:11px; font-weight:bold; color:var(--text-muted); margin-bottom:8px;">MEMBERS</div>
             <div id="member-list" style="flex:1; overflow-y:auto;"></div>
-            <input type="text" id="add-user-input" class="auth-input" placeholder="@username" style="margin-top:10px;">
+            <input type="text" id="add-user-input" class="auth-input" placeholder="@username" style="margin-top:10px; font-size: 13px;">
             <button id="btn-add-user" class="btn-primary" style="width:100%; font-size:12px;">Add Member</button>
             <button id="btn-leave-chat" class="btn-logout" style="display:none; margin-top:10px; border-color:#da373c; color:#da373c;">Leave Group</button>
         </aside>
