@@ -1,8 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, getDocs, deleteDoc, arrayUnion } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
     authDomain: "message-salmon.firebaseapp.com",
@@ -16,250 +15,261 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// --- GLOBAL VARIABLES ---
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
+let typingUnsub = null;
 
-// --- AUTH LISTENER (THE BRAIN) ---
+// --- AUTHENTICATION ---
 onAuthStateChanged(auth, async (user) => {
-    const errBox = document.getElementById('login-error');
-    
     if (user) {
-        console.log("Auth Detected: " + user.uid);
-        if(errBox) errBox.innerText = "Loading Profile...";
+        const userRef = doc(db, "users", user.uid);
+        let userSnap = await getDoc(userRef);
         
-        // --- RETRY LOGIC TO FIX "LOADING FOREVER" ---
-        // Sometimes Auth finishes before the Database is ready. We retry 3 times.
-        let userSnap = null;
-        let attempts = 0;
-        
-        while (attempts < 5) {
-            userSnap = await getDoc(doc(db, "users", user.uid));
-            if (userSnap.exists()) break;
-            console.log("Profile not found yet, retrying...");
-            await new Promise(r => setTimeout(r, 1000)); // Wait 1 second
-            attempts++;
+        // If the user was kicked (doc deleted), force logout
+        if (!userSnap.exists()) {
+            console.log("No profile found. You may have been kicked.");
+            signOut(auth);
+            return;
         }
 
-        if (userSnap && userSnap.exists()) {
-            // SUCCESS
-            currentUser = user;
-            const data = userSnap.data();
-            
-            // Update UI elements safely
-            const nameEl = document.getElementById('my-name');
-            const avatarEl = document.getElementById('my-avatar');
-            const adminBtn = document.getElementById('btn-open-admin');
-            
-            if(nameEl) nameEl.innerText = data.username;
-            if(avatarEl) avatarEl.innerText = (data.username || "?")[0].toUpperCase();
-            if(adminBtn && data.admin) adminBtn.style.display = 'block';
-
-            // Hide Login, Show App
-            document.getElementById('login-overlay').style.display = 'none';
-            document.getElementById('app-layout').style.display = 'flex';
-            
-            loadChannelList();
+        currentUser = { id: user.uid, ...userSnap.data() };
+        document.getElementById('my-name').innerText = currentUser.username;
+        document.getElementById('my-avatar').innerText = currentUser.username[0].toUpperCase();
+        
+        // Admin UI visibility
+        if (currentUser.admin) {
+            document.getElementById('btn-open-admin').style.display = 'block';
+            document.getElementById('btn-group-settings').style.display = 'block';
         } else {
-            // FAILED TO FIND PROFILE
-            console.error("User authenticated but no profile found in Firestore.");
-            if(errBox) errBox.innerText = "Error: Profile not found. Please register again.";
-            await signOut(auth); // Force logout so they can try again
+            document.getElementById('btn-open-admin').style.display = 'none';
+            document.getElementById('btn-group-settings').style.display = 'none';
         }
+
+        document.getElementById('login-overlay').style.display = 'none';
+        document.getElementById('app-layout').style.display = 'flex';
+        loadChannels();
     } else {
-        // LOGGED OUT
-        console.log("User is logged out");
-        document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
+        document.getElementById('login-overlay').style.display = 'flex';
     }
 });
 
-// --- LOGIN BUTTON ---
-document.getElementById('btn-signin').addEventListener('click', () => {
+// LOGIN & REGISTER
+document.getElementById('btn-signin').onclick = () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
-    const errBox = document.getElementById('login-error');
+    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p).catch(e => {
+        document.getElementById('login-error').innerText = "Login Failed: " + e.message;
+    });
+};
 
-    if (!u || !p) { errBox.innerText = "Fill in all fields"; return; }
-    errBox.innerText = "Authenticating...";
-
-    signInWithEmailAndPassword(auth, `${u}@salmon.com`, p)
-        .catch((error) => {
-            console.error(error);
-            // Clean up error message
-            let msg = error.message.replace("Firebase: ", "").replace("auth/", "");
-            errBox.innerText = "Login Failed: " + msg;
-        });
-});
-
-// --- REGISTER BUTTON ---
-document.getElementById('btn-register').addEventListener('click', async () => {
+document.getElementById('btn-register').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
-    const errBox = document.getElementById('login-error');
-
-    if (!u || !p) { errBox.innerText = "Fill in all fields"; return; }
-    errBox.innerText = "Creating Account...";
-
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        console.log("Account created on Auth Server.");
-        
-        errBox.innerText = "Setting up Database...";
-        
-        // CRITICAL: Wait for this to finish before the Auth Listener tries to read it
-        await setDoc(doc(db, "users", res.user.uid), {
-            username: u,
-            verified: false,
-            admin: false
+        await setDoc(doc(db, "users", res.user.uid), { 
+            username: u, 
+            verified: false, 
+            admin: false,
+            createdAt: serverTimestamp() 
         });
-        
-        console.log("Database Profile Created.");
-        errBox.innerText = "Success! Entering...";
-        
-    } catch (error) {
-        console.error(error);
-        let msg = error.message.replace("Firebase: ", "").replace("auth/", "");
-        errBox.innerText = "Signup Failed: " + msg;
-    }
-});
+    } catch (e) { document.getElementById('login-error').innerText = e.message; }
+};
 
-document.getElementById('btn-logout').addEventListener('click', () => {
-    // Reset state
-    currentUser = null;
-    activeChatId = null;
-    if(msgUnsub) msgUnsub();
-    signOut(auth).then(() => location.reload()); // Refresh page to clear cache
-});
+document.getElementById('btn-logout').onclick = () => signOut(auth).then(() => location.reload());
 
-// --- CHAT FUNCTIONS ---
-function loadChannelList() {
-    const q = query(collection(db, "conversations"), orderBy("lastUpdated", "desc"));
-    onSnapshot(q, (snapshot) => {
+// --- CHANNELS ---
+function loadChannels() {
+    onSnapshot(query(collection(db, "conversations"), orderBy("lastUpdated", "desc")), (snap) => {
         const list = document.getElementById('channel-list');
-        if(!list) return;
         list.innerHTML = "";
-        snapshot.forEach(docSnap => {
-            const data = docSnap.data();
-            const div = document.createElement('div');
-            div.className = `channel-btn ${activeChatId === docSnap.id ? 'active' : ''}`;
-            div.innerText = `# ${data.name}`;
-            div.onclick = () => openChat(docSnap.id, data.name);
-            list.appendChild(div);
+        snap.forEach(d => {
+            const data = d.data();
+            const btn = document.createElement('div');
+            btn.className = `channel-btn ${activeChatId === d.id ? 'active' : ''}`;
+            btn.innerHTML = `<span># ${data.name}</span>`;
+            btn.onclick = () => openChat(d.id, data.name);
+            list.appendChild(btn);
         });
     });
 }
 
-async function openChat(chatId, chatName) {
+async function openChat(id, name) {
     if (msgUnsub) msgUnsub();
-    activeChatId = chatId;
+    if (typingUnsub) typingUnsub();
+    activeChatId = id;
+    document.getElementById('chat-title').innerText = `# ${name}`;
     
-    document.getElementById('chat-title').innerText = `# ${chatName}`;
-    const inputArea = document.getElementById('input-area');
+    // Only admins can message in announcements
+    document.getElementById('input-area').style.display = (name.toLowerCase() === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // Check Admin Permissions for Announcements
-    const userSnap = await getDoc(doc(db, "users", currentUser.uid));
-    const isAdmin = userSnap.data()?.admin || false;
-    
-    if (chatName.toLowerCase() === 'announcements' && !isAdmin) {
-        inputArea.style.display = 'none';
-    } else {
-        inputArea.style.display = 'block';
-    }
+    await updateDoc(doc(db, "conversations", id), { members: arrayUnion(currentUser.id) });
+    updateMembers(id);
+    listenTyping(id);
 
-    updateMembers(chatId);
-
-    const q = query(collection(db, "conversations", chatId, "messages"), orderBy("timestamp", "asc"));
-    msgUnsub = onSnapshot(q, (snapshot) => {
+    msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box');
         box.innerHTML = "";
-        
-        snapshot.forEach(async (msgDoc) => {
-            const m = msgDoc.data();
-            const isMe = m.senderId === currentUser.uid;
-            
-            const row = document.createElement('div');
-            row.className = `msg-row ${isMe ? 'me' : 'them'}`;
-            
-            // Only add badge if not me
-            if (!isMe) {
-                 getDoc(doc(db, "users", m.senderId)).then(s => {
-                     if(s.exists() && s.data().verified) {
-                         const meta = row.querySelector('.msg-meta');
-                         if(meta) meta.innerHTML += `<span class="badge"></span>`;
-                     }
-                 });
-            }
-
-            row.innerHTML = `
-                <div class="msg-meta">${isMe ? '' : m.senderName}</div>
+        snap.forEach(d => {
+            const m = d.data();
+            const isMe = m.senderId === currentUser.id;
+            const div = document.createElement('div');
+            div.className = `msg-row ${isMe ? 'me' : 'them'}`;
+            div.innerHTML = `
+                <div class="msg-meta">${m.senderName}</div>
                 <div class="bubble">${m.content}</div>
             `;
-            box.appendChild(row);
+            if (currentUser.admin) {
+                const del = document.createElement('button');
+                del.className = "delete-btn"; del.innerText = "Delete";
+                del.onclick = () => deleteDoc(doc(db, "conversations", id, "messages", d.id));
+                div.appendChild(del);
+            }
+            box.appendChild(div);
         });
-        
-        setTimeout(() => box.scrollTop = box.scrollHeight, 100);
+        box.scrollTop = box.scrollHeight;
     });
 }
 
-async function updateMembers(chatId) {
-    const list = document.getElementById('member-list');
-    list.innerHTML = '<div style="padding:10px; color:gray;">Loading...</div>';
-    
-    const chatDoc = await getDoc(doc(db, "conversations", chatId));
-    const members = chatDoc.data()?.members || [];
-    
-    list.innerHTML = "";
-    members.forEach(async (uid) => {
-        const uDoc = await getDoc(doc(db, "users", uid));
-        if (uDoc.exists()) {
-            const u = uDoc.data();
-            const div = document.createElement('div');
-            div.style.padding = "10px";
-            div.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
-            div.innerHTML = `${u.username} ${u.verified ? '✅' : ''}`;
-            list.appendChild(div);
+// --- TYPING ---
+const msgInput = document.getElementById('msg-input');
+msgInput.oninput = () => {
+    if (!activeChatId) return;
+    updateDoc(doc(db, "conversations", activeChatId), { [`typing.${currentUser.id}`]: true });
+    setTimeout(() => {
+        updateDoc(doc(db, "conversations", activeChatId), { [`typing.${currentUser.id}`]: false });
+    }, 3000);
+};
+
+function listenTyping(id) {
+    typingUnsub = onSnapshot(doc(db, "conversations", id), (d) => {
+        const data = d.data();
+        let typers = 0;
+        if (data && data.typing) {
+            for (let uid in data.typing) {
+                if (data.typing[uid] && uid !== currentUser.id) typers++;
+            }
         }
+        document.getElementById('typing-indicator').innerText = typers > 0 ? "Someone is typing..." : "";
     });
 }
 
-// --- SEND & CREATE ---
-document.getElementById('btn-send').addEventListener('click', sendMessage);
-document.getElementById('msg-input').addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') sendMessage();
-});
+// --- MESSAGING ---
+document.getElementById('btn-send').onclick = sendMessage;
+msgInput.onkeypress = (e) => { if (e.key === 'Enter') sendMessage(); };
 
 async function sendMessage() {
-    const input = document.getElementById('msg-input');
-    const text = input.value.trim();
+    const text = msgInput.value.trim();
     if (!text || !activeChatId) return;
-
-    const myName = document.getElementById('my-name').innerText;
-    input.value = ""; 
-
+    msgInput.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: text,
-        senderId: currentUser.uid,
-        senderName: myName,
-        timestamp: serverTimestamp()
+        content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    
     updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 }
 
-document.getElementById('btn-create').addEventListener('click', async () => {
-    const name = document.getElementById('new-channel-name').value.trim();
-    if (!name) return;
-    await addDoc(collection(db, "conversations"), {
-        name: name,
-        members: [currentUser.uid],
-        lastUpdated: serverTimestamp()
+// --- POWER ADMIN PANEL ---
+document.getElementById('btn-open-admin').onclick = async () => {
+    document.getElementById('admin-overlay').style.display = 'flex';
+    const list = document.getElementById('admin-user-list');
+    list.innerHTML = "Loading Users...";
+    const snap = await getDocs(collection(db, "users"));
+    list.innerHTML = "";
+    
+    snap.forEach(d => {
+        const u = d.data();
+        if (d.id === currentUser.id) return; // Can't kick yourself
+        
+        const row = document.createElement('div');
+        row.style = "padding:15px; border-bottom:1px solid #333; display:flex; flex-direction:column; gap:10px;";
+        row.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <strong>${u.username} ${u.verified ? '✅' : ''}</strong>
+                <div style="display:flex; gap:5px;">
+                    <button class="btn verify-toggle" data-id="${d.id}" data-v="${u.verified}" style="background:var(--accent); font-size:10px; padding:5px;">Verify</button>
+                    <button class="btn kick-btn" data-id="${d.id}" style="background:var(--danger); font-size:10px; padding:5px; color:white;">KICK</button>
+                </div>
+            </div>
+            <div style="display:flex; gap:5px;">
+                <input type="text" class="input-box" placeholder="Rename user..." style="margin:0; padding:5px; height:30px;">
+                <button class="btn change-name-btn" data-id="${d.id}" style="background:var(--bg-input); color:white; width:auto; font-size:10px;">Rename</button>
+            </div>
+        `;
+        list.appendChild(row);
     });
-    document.getElementById('new-channel-name').value = "";
-});
 
-document.getElementById('btn-toggle-members').addEventListener('click', () => {
-    const sb = document.getElementById('sidebar-right');
-    sb.style.display = (sb.style.display === 'none' || sb.style.display === '') ? 'flex' : 'none';
-});
+    // Verify Logic
+    document.querySelectorAll('.verify-toggle').forEach(b => b.onclick = async (e) => {
+        const isV = e.target.dataset.v === 'true';
+        await updateDoc(doc(db, "users", e.target.dataset.id), { verified: !isV });
+        document.getElementById('btn-open-admin').onclick();
+    });
+
+    // Rename Logic
+    document.querySelectorAll('.change-name-btn').forEach(b => b.onclick = async (e) => {
+        const newName = e.target.previousElementSibling.value;
+        if (newName) {
+            await updateDoc(doc(db, "users", e.target.dataset.id), { username: newName });
+            document.getElementById('btn-open-admin').onclick();
+        }
+    });
+
+    // Kick Logic
+    document.querySelectorAll('.kick-btn').forEach(b => b.onclick = async (e) => {
+        if (confirm("Permanently delete this user's profile and kick them?")) {
+            await deleteDoc(doc(db, "users", e.target.dataset.id));
+            document.getElementById('btn-open-admin').onclick();
+        }
+    });
+};
+
+// --- GROUP SETTINGS ---
+document.getElementById('btn-group-settings').onclick = () => {
+    document.getElementById('channel-settings-overlay').style.display = 'flex';
+    document.getElementById('edit-channel-name').value = document.getElementById('chat-title').innerText.replace('# ', '');
+};
+
+document.getElementById('btn-save-channel').onclick = async () => {
+    const newName = document.getElementById('edit-channel-name').value;
+    if (newName && activeChatId) {
+        await updateDoc(doc(db, "conversations", activeChatId), { name: newName });
+        document.getElementById('channel-settings-overlay').style.display = 'none';
+    }
+};
+
+// --- HELPERS ---
+async function updateMembers(id) {
+    const snap = await getDoc(doc(db, "conversations", id));
+    const mems = snap.data().members || [];
+    const list = document.getElementById('member-list');
+    list.innerHTML = "";
+    for (let uid of mems) {
+        const u = await getDoc(doc(db, "users", uid));
+        if (u.exists()) {
+            const div = document.createElement('div');
+            div.style = "padding:10px; font-size:13px; border-bottom:1px solid rgba(255,255,255,0.05)";
+            div.innerHTML = `${u.data().username} ${u.data().verified ? '✅' : ''} ${u.data().admin ? '🛡️' : ''}`;
+            list.appendChild(div);
+        }
+    }
+}
+
+document.getElementById('btn-create').onclick = async () => {
+    const n = document.getElementById('new-channel-name').value.trim();
+    if (n) {
+        await addDoc(collection(db, "conversations"), { 
+            name: n, 
+            lastUpdated: serverTimestamp(), 
+            members: [currentUser.id],
+            typing: {}
+        });
+        document.getElementById('new-channel-name').value = "";
+    }
+};
+
+document.getElementById('btn-toggle-members').onclick = () => {
+    const s = document.getElementById('sidebar-right');
+    s.style.display = (s.style.display === 'none') ? 'flex' : 'none';
+};
