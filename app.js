@@ -1,29 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { 
-    getAuth, 
-    signInWithEmailAndPassword, 
-    createUserWithEmailAndPassword, 
-    onAuthStateChanged, 
-    signOut 
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { 
-    getFirestore, 
-    doc, 
-    setDoc, 
-    getDoc, 
-    collection, 
-    addDoc, 
-    query, 
-    where, 
-    onSnapshot, 
-    orderBy, 
-    serverTimestamp, 
-    updateDoc, 
-    arrayUnion, 
-    arrayRemove 
-} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, where, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// --- CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
     authDomain: "message-salmon.firebaseapp.com",
@@ -41,67 +19,59 @@ let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
 
-// --- AUTHENTICATION ---
+// Helper to catch common setup errors
+const handleErr = (e) => {
+    console.error(e);
+    if (e.code === 'auth/operation-not-allowed') {
+        alert("Firebase Error: You must enable 'Email/Password' in the Firebase Auth Console.");
+    } else {
+        alert("Firebase error");
+    }
+};
 
 onAuthStateChanged(auth, async (user) => {
-    const authBox = document.getElementById('auth-container');
-    const appBox = document.getElementById('app-container');
-    
     if (user) {
         currentUser = user;
         const name = user.email.split('@')[0];
         document.getElementById('user-display-name').innerText = name;
         document.getElementById('user-badge').innerText = name[0].toUpperCase();
-        
-        authBox.style.display = 'none';
-        appBox.style.display = 'flex';
+        document.getElementById('auth-container').style.display = 'none';
+        document.getElementById('app-container').style.display = 'flex';
         loadChannels();
     } else {
-        authBox.style.display = 'block';
-        appBox.style.display = 'none';
+        document.getElementById('auth-container').style.display = 'block';
+        document.getElementById('app-container').style.display = 'none';
     }
 });
 
-// LOGIN ACTION
+// LOG IN
 document.getElementById('btn-login').onclick = async () => {
     const u = document.getElementById('username').value.trim().toLowerCase();
     const p = document.getElementById('password').value;
+    if (!u || !p) return;
     
-    if (!u || !p) return alert("Enter username and password");
-
-    try {
-        // We append @salmon.com to turn the username into a valid email format
-        await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-    } catch (e) {
-        console.error("DEBUG: Firebase Login Error Code ->", e.code);
-        alert("Firebase error"); 
-    }
+    // Auto-adds @salmon.com
+    const email = u.includes('@') ? u : `${u}@salmon.com`;
+    signInWithEmailAndPassword(auth, email, p).catch(handleErr);
 };
 
-// SIGNUP ACTION
+// SIGN UP
 document.getElementById('btn-signup').onclick = async () => {
     const u = document.getElementById('username').value.trim().toLowerCase();
     const p = document.getElementById('password').value;
+    if (!u || p.length < 6) return alert("Min 6 chars for password");
 
-    if (!u || p.length < 6) return alert("Username required & Password min 6 characters");
-
+    const email = `${u}@salmon.com`;
     try {
-        const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        
-        // Save user data to Firestore so we can search for them later
+        const res = await createUserWithEmailAndPassword(auth, email, p);
         await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
         await setDoc(doc(db, "users", res.user.uid), { username: u });
-        
-        alert("Account Created! Logging in...");
-    } catch (e) {
-        console.error("DEBUG: Firebase Signup Error Code ->", e.code);
-        alert("Firebase error");
-    }
+    } catch (e) { handleErr(e); }
 };
 
 document.getElementById('btn-logout').onclick = () => signOut(auth);
 
-// --- CHAT LOGIC ---
+// --- CHAT FUNCTIONS ---
 
 function loadChannels() {
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.uid));
@@ -121,15 +91,13 @@ function loadChannels() {
 async function openChat(id, name, members) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
-    
     document.getElementById('welcome-view').style.display = 'none';
     document.getElementById('messages').style.display = 'flex';
     document.getElementById('input-area').style.display = 'block';
     document.getElementById('btn-leave-chat').style.display = 'block';
-    document.getElementById('chat-title').innerHTML = `<span style="opacity:0.5">#</span> ${name}`;
+    document.getElementById('chat-title').innerHTML = `# ${name}`;
 
     loadMembers(members);
-
     const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     msgUnsub = onSnapshot(q, (snap) => {
         const box = document.getElementById('messages');
@@ -141,7 +109,7 @@ async function openChat(id, name, members) {
             div.innerHTML = `<span class="msg-sender">${m.senderName}</span><span class="msg-content">${m.content}</span>`;
             box.appendChild(div);
         });
-        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+        box.scrollTop = box.scrollHeight;
     });
 }
 
@@ -159,53 +127,38 @@ async function loadMembers(memberIds) {
     }
 }
 
-// --- ACTIONS ---
-
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     if (!input.value.trim() || !activeChatId) return;
-    try {
-        await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-            content: input.value, 
-            senderId: currentUser.uid, 
-            senderName: currentUser.email.split('@')[0], 
-            timestamp: serverTimestamp()
-        });
-        input.value = "";
-    } catch (e) { alert("Firebase error"); }
+    await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+        content: input.value, senderId: currentUser.uid, senderName: currentUser.email.split('@')[0], timestamp: serverTimestamp()
+    });
+    input.value = "";
 };
 
 document.getElementById('btn-create-channel').onclick = async () => {
     const n = document.getElementById('group-name').value.trim();
     if (n) {
-        try {
-            await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
-            document.getElementById('group-name').value = "";
-        } catch (e) { alert("Firebase error"); }
+        await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+        document.getElementById('group-name').value = "";
     }
 };
 
 document.getElementById('btn-add-user').onclick = async () => {
     const name = document.getElementById('add-user-input').value.toLowerCase().trim();
     if (!name || !activeChatId) return;
-    try {
-        const snap = await getDoc(doc(db, "usernames", name));
-        if (snap.exists()) {
-            await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-            document.getElementById('add-user-input').value = "";
-            alert("User added!");
-        } else { alert("User not found"); }
-    } catch (e) { alert("Firebase error"); }
+    const snap = await getDoc(doc(db, "usernames", name));
+    if (snap.exists()) {
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
+        document.getElementById('add-user-input').value = "";
+    } else { alert("User not found"); }
 };
 
 document.getElementById('btn-leave-chat').onclick = async () => {
-    if (!activeChatId || !confirm("Leave group?")) return;
-    try {
+    if (confirm("Leave?")) {
         await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.uid) });
-        location.reload(); 
-    } catch (e) { alert("Firebase error"); }
+        location.reload();
+    }
 };
 
-document.getElementById('btn-toggle-menu').onclick = () => {
-    document.getElementById('sidebar-left').classList.toggle('open');
-};
+document.getElementById('btn-toggle-menu').onclick = () => document.getElementById('sidebar-left').classList.toggle('open');
