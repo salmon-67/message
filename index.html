@@ -35,16 +35,25 @@
         #sidebar-right { width: 220px; background: var(--bg-sidebar); border-left: 1px solid #1e1f22; padding: 15px; display: flex; flex-direction: column; }
 
         .header-bar { height: 48px; display: flex; align-items: center; padding: 0 16px; border-bottom: 1px solid #1e1f22; font-weight: bold; flex-shrink: 0; }
-        #messages { flex: 1; overflow-y: auto; padding: 20px; display: none; flex-direction: column; gap: 4px; }
+        #messages { flex: 1; overflow-y: auto; padding: 20px; display: none; flex-direction: column; }
         
         /* Welcome Screen */
         #welcome-view { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px; }
         .welcome-icon { width: 120px; height: 120px; background: #383a40; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; font-size: 50px; }
 
-        /* Messages */
-        .msg-container { display: flex; flex-direction: column; margin-bottom: 8px; padding: 4px 12px; border-radius: 4px; }
+        /* Messages & Dividers */
+        .msg-container { display: flex; flex-direction: column; margin-bottom: 12px; padding: 4px 12px; border-radius: 4px; }
         .msg-sender { font-size: 0.9rem; font-weight: 600; color: var(--discord-blue); }
-        .msg-content { font-size: 0.95rem; line-height: 1.4; color: #dbdee1; word-wrap: break-word; }
+        .msg-time { font-size: 0.75rem; color: var(--text-muted); margin-left: 8px; font-weight: normal; }
+        .msg-content { font-size: 0.95rem; line-height: 1.4; color: #dbdee1; word-wrap: break-word; margin-top: 2px; }
+
+        .date-divider {
+            display: flex; align-items: center; text-align: center; margin: 24px 0;
+            color: var(--text-muted); font-size: 12px; font-weight: bold; text-transform: uppercase;
+        }
+        .date-divider::before, .date-divider::after { content: ''; flex: 1; border-bottom: 1px solid #3f4147; }
+        .date-divider:not(:empty)::before { margin-right: 15px; }
+        .date-divider:not(:empty)::after { margin-left: 15px; }
 
         /* Sidebar Channel Items */
         .channel-item { padding: 10px 12px; margin: 2px 8px; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
@@ -61,7 +70,6 @@
         #msg-input { background: none; border: none; flex: 1; outline: none; color: #fff; }
         
         button { cursor: pointer; border: none; border-radius: 4px; font-weight: 500; padding: 8px 16px; transition: opacity 0.2s; }
-        button:hover { opacity: 0.8; }
         .btn-primary { background: var(--discord-blue); }
         .btn-logout { background: none; border: 1px solid var(--discord-red); color: var(--discord-red); font-size: 11px; padding: 4px 8px; }
 
