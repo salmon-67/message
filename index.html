@@ -27,7 +27,7 @@
             --input-bg: #ebedef;
         }
 
-        * { box-sizing: border-box; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--text-primary); }
+        * { box-sizing: border-box; font-family: 'Segoe UI', Roboto, sans-serif; color: var(--text-primary); }
         body { margin: 0; background: var(--bg-darker); display: flex; height: 100dvh; overflow: hidden; transition: background var(--transition); }
 
         /* Auth UI */
@@ -60,20 +60,29 @@
         #messages { flex: 1; overflow-y: auto; padding: 20px; display: none; flex-direction: column; }
         
         .msg-container { margin-bottom: 18px; line-height: 1.4; }
-        .msg-sender { font-weight: 700; color: var(--accent); font-size: 0.95rem; }
+        .msg-sender { font-weight: 700; color: var(--accent); font-size: 0.95rem; display: flex; align-items: center; }
         .msg-content { margin-top: 4px; color: var(--text-primary); white-space: pre-wrap; }
         .msg-system { text-align: center; font-size: 0.8rem; color: var(--text-muted); margin: 20px 0; font-style: italic; }
 
+        /* Verified Badge */
+        .verified-badge {
+            display: inline-flex;
+            width: 16px;
+            height: 16px;
+            margin-left: 6px;
+        }
+        .verified-badge img { width: 100%; height: 100%; object-fit: contain; }
+
         /* Bubbles & Buttons */
         .action-btn { background: var(--input-bg); border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; margin: 4px 4px 0 0; }
-        .channel-item { padding: 10px 15px; margin: 2px 10px; border-radius: 5px; cursor: pointer; font-weight: 500; }
+        .channel-item { padding: 12px 15px; margin: 2px 10px; border-radius: 5px; cursor: pointer; font-weight: 500; }
         .channel-item.active { background: var(--accent); color: white; }
         
         #input-area { padding: 20px; display: none; }
         .input-wrapper { background: var(--input-bg); border-radius: 8px; padding: 12px; display: flex; gap: 10px; }
         #msg-input { background: none; border: none; flex: 1; outline: none; font-size: 16px; resize: none; max-height: 150px; }
         
-        .typing-indicator { font-size: 12px; color: var(--text-muted); padding: 5px 20px; height: 20px; }
+        #typing-box { font-size: 12px; color: var(--text-muted); padding: 5px 20px; height: 20px; font-style: italic; }
         .btn-primary { background: var(--accent); border: none; padding: 8px 16px; border-radius: 5px; font-weight: 600; cursor: pointer; }
     </style>
 </head>
@@ -91,7 +100,7 @@
 
     <div id="app-container" style="display:none;">
         <nav id="sidebar-left">
-            <div class="header-bar" style="font-weight: 800; letter-spacing: 1px;">SALMON</div>
+            <div class="header-bar" style="font-weight: 800; letter-spacing: 1px; color: var(--accent);">SALMON</div>
             <div id="chat-list" style="flex:1; overflow-y:auto; padding-top:10px;"></div>
             <div style="padding:15px; border-top: 1px solid rgba(0,0,0,0.1);">
                 <input type="text" id="group-name" class="auth-input" placeholder="Channel name..." style="padding: 10px; font-size: 14px;">
@@ -100,7 +109,7 @@
             <div style="padding:10px; background: rgba(0,0,0,0.1); display:flex; align-items:center; gap:10px;">
                 <div id="user-badge" style="width:35px; height:35px; background:var(--accent); border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:bold;">U</div>
                 <div id="user-display-name" style="flex:1; font-size:13px; font-weight:600; overflow:hidden;">User</div>
-                <button id="btn-logout" style="background:none; border:1px solid var(--danger); color:var(--danger); padding:4px 8px; border-radius:4px; font-size:10px;">Log Out</button>
+                <button id="btn-logout" style="background:none; border:1px solid var(--danger); color:var(--danger); padding:4px 8px; border-radius:4px; font-size:10px;">Out</button>
             </div>
         </nav>
 
@@ -114,11 +123,11 @@
             
             <div id="welcome-view" style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; opacity:0.6;">
                 <div style="font-size:80px;">🐟</div>
-                <p>Welcome to Salmon Chat</p>
+                <p>Choose a channel to start</p>
             </div>
 
             <div id="messages"></div>
-            <div id="typing-box" class="typing-indicator"></div>
+            <div id="typing-box"></div>
             
             <div id="input-area">
                 <div class="input-wrapper">
