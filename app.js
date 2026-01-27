@@ -20,6 +20,7 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
+// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -38,6 +39,7 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
+// --- SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
@@ -61,7 +63,9 @@ function loadChannels() {
     });
 }
 
+// --- OPEN CHAT (ZERO DUPLICATION LOGIC) ---
 function openChat(id, name) {
+    // Kill existing listeners
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
@@ -74,61 +78,50 @@ function openChat(id, name) {
     
     loadChannels();
 
-    // SETUP SIDEBAR STRUCTURE TO PREVENT DUPLICATION
+    // Reset UI structure - This kills the Add Member duplication for good
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
         <div id="member-list" class="scroll-area"></div>
-        <div id="add-member-ui" style="padding:15px; border-top:var(--border);">
+        <div id="static-add-ui" style="padding:15px; border-top:var(--border);">
             <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-bottom:5px;">
             <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
-            <div id="add-err" style="color:var(--danger); font-size:10px; margin-top:5px;"></div>
+            <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
         </div>
     `;
 
-    // HIDDEN ADD UI FOR ANNOUNCEMENTS
-    if(name === 'announcements') document.getElementById('add-member-ui').style.display = 'none';
+    if(name === 'announcements') document.getElementById('static-add-ui').style.display = 'none';
 
-    // BIND ADD MEMBER BUTTON (ONCE)
+    // Static Add Logic (Not inside a listener)
     document.getElementById('btn-add-member').onclick = async () => {
-        const targetName = document.getElementById('target-name').value.trim();
-        if(!targetName) return;
-        
-        const qU = query(collection(db, "users"), where("username", "==", targetName), limit(1));
-        const snapU = await getDocs(qU);
-        
-        if (!snapU.empty) {
-            const newUser = snapU.docs[0].data();
-            const newUserId = snapU.docs[0].id;
-            
-            await updateDoc(doc(db, "conversations", id), { 
-                members: arrayUnion(newUserId),
-                lastUpdated: serverTimestamp() 
-            });
-
-            // SEND SYSTEM MESSAGE
+        const val = document.getElementById('target-name').value.trim();
+        if(!val) return;
+        const qU = query(collection(db, "users"), where("username", "==", val), limit(1));
+        const sU = await getDocs(qU);
+        if(!sU.empty) {
+            const newId = sU.docs[0].id;
+            const newName = sU.docs[0].data().username;
+            await updateDoc(doc(db, "conversations", id), { members: arrayUnion(newId), lastUpdated: serverTimestamp() });
             await addDoc(collection(db, "conversations", id, "messages"), {
-                content: `${currentUser.username} added ${newUser.username} to the chat`,
-                senderId: "system",
-                senderName: "System",
-                timestamp: serverTimestamp()
+                content: `${currentUser.username} added ${newName}`, senderId: "system", senderName: "System", timestamp: serverTimestamp()
             });
-
             document.getElementById('target-name').value = "";
             document.getElementById('add-err').innerText = "";
-        } else {
-            document.getElementById('add-err').innerText = "User not found";
-        }
+        } else { document.getElementById('add-err').innerText = "User not found"; }
     };
 
-    // MEMBER LIST LISTENER
+    // --- MEMBER LISTENER (SYNCED FIX) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
-        const list = document.getElementById('member-list');
-        list.innerHTML = ""; 
-        const data = docSnap.data();
-        if (!data) return;
+        const memberListDiv = document.getElementById('member-list');
+        if (!memberListDiv) return;
 
-        for (let uid of (data.members || [])) {
+        const data = docSnap.data();
+        if (!data || !data.members) return;
+
+        // Build list in memory first (DocumentFragment) to prevent visual duplication
+        const fragment = document.createDocumentFragment();
+        
+        for (let uid of data.members) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -136,21 +129,24 @@ function openChat(id, name) {
                 const item = document.createElement('div');
                 item.className = "member-item";
                 item.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
-                list.appendChild(item);
+                fragment.appendChild(item);
             }
         }
+
+        // Wipe and Swap once
+        memberListDiv.innerHTML = ""; 
+        memberListDiv.appendChild(fragment);
     });
 
-    // MESSAGE LISTENER
+    // --- MESSAGES LISTENER ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
         snap.forEach(d => {
             const m = d.data();
             const div = document.createElement('div'); 
-            // Style system messages differently
             if(m.senderId === "system") {
-                div.style = "text-align:center; font-size:11px; color:var(--text-dim); margin: 10px 0;";
+                div.style = "text-align:center; font-size:11px; color:#71717a; margin: 10px 0;";
                 div.innerHTML = `<i>${m.content}</i>`;
             } else {
                 div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
@@ -160,7 +156,7 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
-        
+
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
@@ -169,6 +165,7 @@ function openChat(id, name) {
     });
 }
 
+// --- SEND MESSAGE ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
@@ -181,16 +178,15 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
     loadChannels();
 };
 
-// AUTH/CHANNEL CREATION
+// --- AUTH HANDLERS ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
-    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { document.getElementById('login-error').innerText = "Login failed"; }
+    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { }
 };
 
 document.getElementById('btn-register').onclick = async () => {
@@ -199,7 +195,7 @@ document.getElementById('btn-register').onclick = async () => {
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
         await setDoc(doc(db, "users", res.user.uid), { username: u, admin: false, verified: false, lastSeen: serverTimestamp() });
-    } catch(e) { document.getElementById('login-error').innerText = "Register failed"; }
+    } catch(e) { }
 };
 
 document.getElementById('btn-create').onclick = async () => {
@@ -213,5 +209,4 @@ async function autoJoinAnnouncements() {
     const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
     const snap = await getDocs(q);
     if (!snap.empty) { await updateDoc(doc(db, "conversations", snap.docs[0].id), { members: arrayUnion(currentUser.id) }); }
-    else { await addDoc(collection(db, "conversations"), { name: "announcements", members: [currentUser.id], lastUpdated: serverTimestamp() }); }
 }
