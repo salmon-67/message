@@ -20,7 +20,6 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -39,16 +38,16 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR (STABILIZED) ---
+// --- SIDEBAR (FLICKER & JUMP FIX) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
-    // Keeping descending order, but we ensure the UI doesn't jump by using a fragment
-    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
+    // Sort by name instead of lastUpdated to prevent the "jumping" effect when messaging
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("name", "asc"));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
-        const fragment = document.createDocumentFragment();
+        list.innerHTML = ""; 
         
         snap.forEach(d => {
             const data = d.data();
@@ -61,11 +60,8 @@ function loadChannels() {
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
             btn.innerText = `# ${data.name}`;
             btn.onclick = () => { if (activeChatId !== d.id) openChat(d.id, data.name); };
-            fragment.appendChild(btn);
+            list.appendChild(btn);
         });
-        
-        list.innerHTML = ""; 
-        list.appendChild(fragment);
     });
 }
 
@@ -81,7 +77,7 @@ function openChat(id, name) {
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // LEAVE BUTTON LOGIC (ADDED BACK)
+    // LEAVE BUTTON
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
@@ -95,8 +91,6 @@ function openChat(id, name) {
             }
         };
     }
-
-    loadChannels();
 
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
@@ -137,8 +131,9 @@ function openChat(id, name) {
 
         const fragment = document.createDocumentFragment();
         const seenIds = new Set(); 
+        const uniqueMembers = [...new Set(data.members)];
 
-        for (let uid of data.members) {
+        for (let uid of uniqueMembers) {
             if (seenIds.has(uid)) continue; 
             seenIds.add(uid);
             const uSnap = await getDoc(doc(db, "users", uid));
@@ -173,10 +168,6 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
-        if (activeChatId === id) {
-            lastReadMap[id] = Date.now();
-            localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-        }
     });
 }
 
@@ -186,7 +177,7 @@ document.getElementById('btn-send').onclick = async () => {
     const text = input.value.trim();
     if (!text || !activeChatId) return;
 
-    lastReadMap[activeChatId] = Date.now() + 5000;
+    lastReadMap[activeChatId] = Date.now() + 2000;
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     input.value = "";
@@ -196,7 +187,7 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- REST OF CODE (SIGNIN/CREATE) ---
+// --- AUTH/UTILS ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
