@@ -18,6 +18,8 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
+// Tracks when we last viewed each channel
+let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
 onAuthStateChanged(auth, async (user) => {
     if (user) {
@@ -40,14 +42,24 @@ onAuthStateChanged(auth, async (user) => {
 
 function loadChannels() {
     if (channelUnsub) channelUnsub();
-    channelUnsub = onSnapshot(query(collection(db, "conversations"), where("members", "array-contains", currentUser.id)), (snap) => {
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
+    
+    channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
         list.innerHTML = ""; 
         snap.forEach(d => {
+            const data = d.data();
+            const isSelected = activeChatId === d.id;
+            
+            // Unread Logic
+            const lastUpdated = data.lastUpdated?.toMillis() || 0;
+            const lastViewed = lastReadMap[d.id] || 0;
+            const isUnread = !isSelected && lastUpdated > lastViewed;
+
             const btn = document.createElement('div');
-            btn.className = `channel-btn ${activeChatId === d.id ? 'active' : ''}`;
-            btn.innerText = `# ${d.data().name}`;
-            btn.onclick = () => openChat(d.id, d.data().name);
+            btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
+            btn.innerText = `# ${data.name}`;
+            btn.onclick = () => openChat(d.id, data.name);
             list.appendChild(btn);
         });
     });
@@ -56,7 +68,13 @@ function loadChannels() {
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
+    
     activeChatId = id;
+    
+    // Mark as Read
+    lastReadMap[id] = Date.now();
+    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+    
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
 
@@ -66,21 +84,22 @@ function openChat(id, name) {
         if(confirm("Leave group?")) {
             await updateDoc(doc(db, "conversations", id), { members: arrayRemove(currentUser.id) });
             activeChatId = null;
-            document.getElementById('messages-box').innerHTML = "";
-            document.getElementById('chat-title').innerText = "# Select Channel";
-            leaveBtn.style.display = "none";
+            location.reload(); 
         }
     };
 
+    // Re-render sidebar to update the Blue/Red highlights
+    loadChannels();
+
+    // MEMBER LIST (Duplication Fixed)
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const list = document.getElementById('member-list');
-        list.innerHTML = ""; // FIX: Wipes duplicates before rebuilding
-        
+        list.innerHTML = ""; 
         const mIds = docSnap.data()?.members || [];
         for (let uid of mIds) {
-            const uDoc = await getDoc(doc(db, "users", uid));
-            if (uDoc.exists()) {
-                const u = uDoc.data();
+            const uSnap = await getDoc(doc(db, "users", uid));
+            if (uSnap.exists()) {
+                const u = uSnap.data();
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
                 const d = document.createElement('div');
                 d.className = "member-item";
@@ -93,6 +112,7 @@ function openChat(id, name) {
             }
         }
 
+        // Add Member UI
         if (name !== 'announcements' && currentUser.admin === true) {
             const addUI = document.createElement('div');
             addUI.style = "margin-top:15px; border-top: 1px solid #333; padding-top:10px;";
@@ -105,11 +125,8 @@ function openChat(id, name) {
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
                 const err = document.getElementById('add-err');
-                if (!nameIn) return;
-
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
                 const snapU = await getDocs(qU);
-                
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
                     document.getElementById('target-name').value = "";
@@ -119,6 +136,7 @@ function openChat(id, name) {
         }
     });
 
+    // MESSAGES
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = "";
@@ -131,6 +149,12 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
+        
+        // Update Read Map if we are actively in the chat
+        if (activeChatId === id) {
+            lastReadMap[id] = Date.now();
+            localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+        }
     });
 }
 
@@ -142,6 +166,7 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
+    // This server timestamp update triggers the "Red" highlight for other users
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
