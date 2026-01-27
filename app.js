@@ -38,28 +38,32 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR (FLICKER & JUMP FIX) ---
+// --- SIDEBAR (REPAIRED) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
-    // Sort by name instead of lastUpdated to prevent the "jumping" effect when messaging
-    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("name", "asc"));
+    // Using a simpler query to ensure it loads without needing a complex index
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
         list.innerHTML = ""; 
         
-        snap.forEach(d => {
-            const data = d.data();
-            const isSelected = activeChatId === d.id;
+        // Sort in memory to prevent Firebase Index errors and jumping
+        const docs = [];
+        snap.forEach(d => docs.push({id: d.id, ...d.data()}));
+        docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
+
+        docs.forEach(data => {
+            const isSelected = activeChatId === data.id;
             const lastUpdated = data.lastUpdated?.toMillis() || 0;
-            const lastViewed = lastReadMap[d.id] || 0;
+            const lastViewed = lastReadMap[data.id] || 0;
             const isUnread = !isSelected && lastUpdated > lastViewed;
 
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
             btn.innerText = `# ${data.name}`;
-            btn.onclick = () => { if (activeChatId !== d.id) openChat(d.id, data.name); };
+            btn.onclick = () => { if (activeChatId !== data.id) openChat(data.id, data.name); };
             list.appendChild(btn);
         });
     });
@@ -77,7 +81,7 @@ function openChat(id, name) {
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // LEAVE BUTTON
+    // LEAVE BUTTON (RESTORED)
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
@@ -122,7 +126,7 @@ function openChat(id, name) {
         } else { document.getElementById('add-err').innerText = "User not found"; }
     };
 
-    // --- MEMBER LISTENER (DE-DUPLICATED) ---
+    // --- MEMBER LISTENER ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const memberListDiv = document.getElementById('member-list');
         if (!memberListDiv) return;
@@ -130,12 +134,9 @@ function openChat(id, name) {
         if (!data || !data.members) return;
 
         const fragment = document.createDocumentFragment();
-        const seenIds = new Set(); 
         const uniqueMembers = [...new Set(data.members)];
 
         for (let uid of uniqueMembers) {
-            if (seenIds.has(uid)) continue; 
-            seenIds.add(uid);
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -177,9 +178,6 @@ document.getElementById('btn-send').onclick = async () => {
     const text = input.value.trim();
     if (!text || !activeChatId) return;
 
-    lastReadMap[activeChatId] = Date.now() + 2000;
-    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-    
     input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
@@ -187,7 +185,7 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH/UTILS ---
+// --- AUTH/CREATION ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
