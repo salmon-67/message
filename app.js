@@ -63,9 +63,8 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT (ZERO DUPLICATION LOGIC) ---
+// --- OPEN CHAT ---
 function openChat(id, name) {
-    // Kill existing listeners
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
@@ -78,7 +77,6 @@ function openChat(id, name) {
     
     loadChannels();
 
-    // Reset UI structure - This kills the Add Member duplication for good
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -92,7 +90,6 @@ function openChat(id, name) {
 
     if(name === 'announcements') document.getElementById('static-add-ui').style.display = 'none';
 
-    // Static Add Logic (Not inside a listener)
     document.getElementById('btn-add-member').onclick = async () => {
         const val = document.getElementById('target-name').value.trim();
         if(!val) return;
@@ -110,7 +107,7 @@ function openChat(id, name) {
         } else { document.getElementById('add-err').innerText = "User not found"; }
     };
 
-    // --- MEMBER LISTENER (SYNCED FIX) ---
+    // --- MEMBER LISTENER (DE-DUPLICATION FIX) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const memberListDiv = document.getElementById('member-list');
         if (!memberListDiv) return;
@@ -118,10 +115,16 @@ function openChat(id, name) {
         const data = docSnap.data();
         if (!data || !data.members) return;
 
-        // Build list in memory first (DocumentFragment) to prevent visual duplication
         const fragment = document.createDocumentFragment();
-        
-        for (let uid of data.members) {
+        const seenIds = new Set(); // TRACKS UNIQUE USERS
+
+        // Get members array and filter for unique values just in case DB has duplicates
+        const uniqueMembers = [...new Set(data.members)];
+
+        for (let uid of uniqueMembers) {
+            if (seenIds.has(uid)) continue; // Double-check logic
+            seenIds.add(uid);
+
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -133,7 +136,7 @@ function openChat(id, name) {
             }
         }
 
-        // Wipe and Swap once
+        // Final UI swap
         memberListDiv.innerHTML = ""; 
         memberListDiv.appendChild(fragment);
     });
@@ -165,7 +168,6 @@ function openChat(id, name) {
     });
 }
 
-// --- SEND MESSAGE ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
@@ -182,7 +184,6 @@ document.getElementById('btn-send').onclick = async () => {
     loadChannels();
 };
 
-// --- AUTH HANDLERS ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
