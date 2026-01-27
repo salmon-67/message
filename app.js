@@ -38,7 +38,7 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR: SMART UPDATE (NO FLICKER) ---
+// --- SIDEBAR: RE-ORDERING & READ STATUS FIX ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
@@ -46,32 +46,26 @@ function loadChannels() {
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
+        const docs = [];
+        snap.forEach(d => docs.push({id: d.id, ...d.data()}));
         
-        snap.docChanges().forEach((change) => {
-            const data = change.doc.data();
-            const id = change.doc.id;
-            const existingBtn = document.getElementById(`btn-${id}`);
+        // 1. RE-ADD ORDERING: Sort by most recent message
+        docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
 
-            if (change.type === "removed") {
-                if (existingBtn) existingBtn.remove();
-                return;
-            }
+        list.innerHTML = ""; 
+        docs.forEach(data => {
+            const isSelected = activeChatId === data.id;
+            const lastUpdated = data.lastUpdated?.toMillis() || 0;
+            const lastViewed = lastReadMap[data.id] || 0;
+            
+            // 2. FIX READ STATUS: Red only if there's a new message AND it's not the active chat
+            const isUnread = !isSelected && lastUpdated > lastViewed;
 
-            const isSelected = activeChatId === id;
-            const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[id] || 0);
-
-            if (!existingBtn) {
-                // Create only if it doesn't exist
-                const btn = document.createElement('div');
-                btn.id = `btn-${id}`;
-                btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
-                btn.innerText = `# ${data.name}`;
-                btn.onclick = () => openChat(id, data.name);
-                list.appendChild(btn);
-            } else {
-                // Just update classes, don't recreate
-                existingBtn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
-            }
+            const btn = document.createElement('div');
+            btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
+            btn.innerText = `# ${data.name}`;
+            btn.onclick = () => openChat(data.id, data.name);
+            list.appendChild(btn);
         });
     });
 }
@@ -82,13 +76,18 @@ function openChat(id, name) {
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
+    
+    // 3. IMMEDIATELY MARK AS READ
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // LEAVE BUTTON
+    // Refresh sidebar so the red dot disappears instantly
+    loadChannels();
+
+    // LEAVE BUTTON (RESTORED)
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
@@ -98,16 +97,11 @@ function openChat(id, name) {
                 activeChatId = null;
                 document.getElementById('messages-box').innerHTML = "";
                 document.getElementById('chat-title').innerText = "Select a channel";
+                loadChannels();
             }
         };
     }
 
-    // UPDATE SIDEBAR SELECTION VISUALLY
-    document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
-    const currentBtn = document.getElementById(`btn-${id}`);
-    if (currentBtn) currentBtn.classList.add('active');
-
-    // SETUP SIDEBAR RIGHT
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -184,6 +178,11 @@ document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
+    
+    // Pre-mark our own message as read so the sidebar doesn't flash red
+    lastReadMap[activeChatId] = Date.now() + 2000;
+    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+    
     input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
