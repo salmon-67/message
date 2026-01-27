@@ -38,31 +38,40 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR: FIXED CHANNELS ---
+// --- SIDEBAR: SMART UPDATE (NO FLICKER) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
-    // Basic query (prevents Index errors)
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
-        const docs = [];
-        snap.forEach(d => docs.push({id: d.id, ...d.data()}));
         
-        // Sort by time in JS so the UI doesn't crash or flicker
-        docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
+        snap.docChanges().forEach((change) => {
+            const data = change.doc.data();
+            const id = change.doc.id;
+            const existingBtn = document.getElementById(`btn-${id}`);
 
-        list.innerHTML = ""; 
-        docs.forEach(data => {
-            const isSelected = activeChatId === data.id;
-            const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
+            if (change.type === "removed") {
+                if (existingBtn) existingBtn.remove();
+                return;
+            }
 
-            const btn = document.createElement('div');
-            btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
-            btn.innerText = `# ${data.name}`;
-            btn.onclick = () => { if (activeChatId !== data.id) openChat(data.id, data.name); };
-            list.appendChild(btn);
+            const isSelected = activeChatId === id;
+            const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[id] || 0);
+
+            if (!existingBtn) {
+                // Create only if it doesn't exist
+                const btn = document.createElement('div');
+                btn.id = `btn-${id}`;
+                btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
+                btn.innerText = `# ${data.name}`;
+                btn.onclick = () => openChat(id, data.name);
+                list.appendChild(btn);
+            } else {
+                // Just update classes, don't recreate
+                existingBtn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
+            }
         });
     });
 }
@@ -89,12 +98,16 @@ function openChat(id, name) {
                 activeChatId = null;
                 document.getElementById('messages-box').innerHTML = "";
                 document.getElementById('chat-title').innerText = "Select a channel";
-                loadChannels();
             }
         };
     }
 
-    // RESET SIDEBAR UI
+    // UPDATE SIDEBAR SELECTION VISUALLY
+    document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
+    const currentBtn = document.getElementById(`btn-${id}`);
+    if (currentBtn) currentBtn.classList.add('active');
+
+    // SETUP SIDEBAR RIGHT
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -102,7 +115,6 @@ function openChat(id, name) {
         <div id="static-add-ui" style="padding:15px; border-top:var(--border);">
             <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-bottom:5px;">
             <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
-            <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
         </div>
     `;
 
@@ -124,15 +136,13 @@ function openChat(id, name) {
         }
     };
 
-    // --- MEMBER LISTENER (DE-DUPLICATED) ---
+    // --- MEMBER LISTENER ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const listDiv = document.getElementById('member-list');
         const data = docSnap.data();
         if (!data || !listDiv) return;
-
         const fragment = document.createDocumentFragment();
         const uniqueIds = [...new Set(data.members)];
-
         for (let uid of uniqueIds) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
@@ -167,8 +177,6 @@ function openChat(id, name) {
         });
         box.scrollTop = box.scrollHeight;
     });
-    
-    loadChannels(); // Refresh active state
 }
 
 // --- SEND ---
@@ -176,7 +184,6 @@ document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
-
     input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
@@ -184,7 +191,7 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH/CREATION ---
+// --- AUTH & CHANNEL CREATION ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
