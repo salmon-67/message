@@ -20,7 +20,7 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH ---
+// --- AUTH OBSERVER ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -39,10 +39,16 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR ---
+// --- SIDEBAR (GLITCH-FREE) ---
 function loadChannels() {
+    // Kill old listener to prevent multiple triggers/flickering
     if (channelUnsub) channelUnsub();
-    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
+
+    const q = query(
+        collection(db, "conversations"), 
+        where("members", "array-contains", currentUser.id), 
+        orderBy("lastUpdated", "desc")
+    );
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
@@ -57,13 +63,15 @@ function loadChannels() {
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
             btn.innerText = `# ${data.name}`;
-            btn.onclick = () => openChat(d.id, data.name);
+            btn.onclick = () => {
+                if (activeChatId !== d.id) openChat(d.id, data.name);
+            };
             list.appendChild(btn);
         });
     });
 }
 
-// --- OPEN CHAT ---
+// --- OPEN CHAT (CLEAN UI) ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -75,8 +83,9 @@ function openChat(id, name) {
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    loadChannels();
+    loadChannels(); // Sync sidebar selection
 
+    // Hard reset Sidebar Structure to prevent duplication
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -90,6 +99,7 @@ function openChat(id, name) {
 
     if(name === 'announcements') document.getElementById('static-add-ui').style.display = 'none';
 
+    // Everyone can add members
     document.getElementById('btn-add-member').onclick = async () => {
         const val = document.getElementById('target-name').value.trim();
         if(!val) return;
@@ -107,7 +117,7 @@ function openChat(id, name) {
         } else { document.getElementById('add-err').innerText = "User not found"; }
     };
 
-    // --- MEMBER LISTENER (DE-DUPLICATION FIX) ---
+    // --- MEMBER LISTENER (DE-DUPLICATED) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const memberListDiv = document.getElementById('member-list');
         if (!memberListDiv) return;
@@ -116,13 +126,10 @@ function openChat(id, name) {
         if (!data || !data.members) return;
 
         const fragment = document.createDocumentFragment();
-        const seenIds = new Set(); // TRACKS UNIQUE USERS
+        const seenIds = new Set(); // Prevent duplicate username rendering
 
-        // Get members array and filter for unique values just in case DB has duplicates
-        const uniqueMembers = [...new Set(data.members)];
-
-        for (let uid of uniqueMembers) {
-            if (seenIds.has(uid)) continue; // Double-check logic
+        for (let uid of data.members) {
+            if (seenIds.has(uid)) continue; 
             seenIds.add(uid);
 
             const uSnap = await getDoc(doc(db, "users", uid));
@@ -135,13 +142,11 @@ function openChat(id, name) {
                 fragment.appendChild(item);
             }
         }
-
-        // Final UI swap
         memberListDiv.innerHTML = ""; 
         memberListDiv.appendChild(fragment);
     });
 
-    // --- MESSAGES LISTENER ---
+    // --- MESSAGE LISTENER ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
@@ -159,7 +164,6 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
-
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
@@ -168,11 +172,13 @@ function openChat(id, name) {
     });
 }
 
+// --- SEND MESSAGE ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
 
+    // Set local unread buffer
     lastReadMap[activeChatId] = Date.now() + 5000;
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
@@ -184,6 +190,7 @@ document.getElementById('btn-send').onclick = async () => {
     loadChannels();
 };
 
+// --- AUTH ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
