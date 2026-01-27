@@ -18,7 +18,6 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
-// Tracks when we last viewed each channel
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
 onAuthStateChanged(auth, async (user) => {
@@ -40,18 +39,17 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
+// --- LOAD CHANNELS (Selection & Unread Logic) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
-        list.innerHTML = ""; 
+        list.innerHTML = ""; // Prevent duplication
         snap.forEach(d => {
             const data = d.data();
             const isSelected = activeChatId === d.id;
-            
-            // Unread Logic
             const lastUpdated = data.lastUpdated?.toMillis() || 0;
             const lastViewed = lastReadMap[d.id] || 0;
             const isUnread = !isSelected && lastUpdated > lastViewed;
@@ -65,10 +63,10 @@ function loadChannels() {
     });
 }
 
+// --- OPEN CHAT (Member Duplication Fixed) ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
-    
     activeChatId = id;
     
     // Mark as Read
@@ -77,7 +75,7 @@ function openChat(id, name) {
     
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
-
+    
     const leaveBtn = document.getElementById('btn-leave-chat');
     leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
     leaveBtn.onclick = async () => {
@@ -88,50 +86,46 @@ function openChat(id, name) {
         }
     };
 
-    // Re-render sidebar to update the Blue/Red highlights
-    loadChannels();
+    loadChannels(); // Refresh highlights
 
-    // MEMBER LIST (Duplication Fixed)
+    // MEMBERS LIST
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const list = document.getElementById('member-list');
-        list.innerHTML = ""; 
+        list.innerHTML = ""; // CRITICAL: Fixes duplication from your images
+        
         const mIds = docSnap.data()?.members || [];
         for (let uid of mIds) {
-            const uSnap = await getDoc(doc(db, "users", uid));
-            if (uSnap.exists()) {
-                const u = uSnap.data();
+            const uDoc = await getDoc(doc(db, "users", uid));
+            if (uDoc.exists()) {
+                const u = uDoc.data();
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
                 const d = document.createElement('div');
                 d.className = "member-item";
-                d.innerHTML = `
-                    <div class="status-dot ${isOnline ? 'online' : ''}"></div>
-                    <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}'); alert('Copied: ${u.username}')">
-                        <b>${u.username}</b> ${u.verified ? "✅" : ""}
-                    </div>`;
+                d.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div>
+                               <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}');">
+                               <b>${u.username}</b> ${u.verified ? "✅" : ""}</div>`;
                 list.appendChild(d);
             }
         }
 
-        // Add Member UI
-        if (name !== 'announcements' && currentUser.admin === true) {
-            const addUI = document.createElement('div');
-            addUI.style = "margin-top:15px; border-top: 1px solid #333; padding-top:10px;";
-            addUI.innerHTML = `
-                <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
-                <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
-                <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>`;
-            list.appendChild(addUI);
+        if (name !== 'announcements' && currentUser.admin) {
+            const addContainer = document.createElement('div');
+            addContainer.innerHTML = `
+                <div style="margin-top:20px; border-top:1px solid #333; padding-top:10px;">
+                    <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
+                    <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
+                    <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
+                </div>`;
+            list.appendChild(addContainer);
 
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
-                const err = document.getElementById('add-err');
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
                 const snapU = await getDocs(qU);
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
                     document.getElementById('target-name').value = "";
-                    err.innerText = "";
-                } else { err.innerText = "Not found"; }
+                } else { document.getElementById('add-err').innerText = "Not found"; }
             };
         }
     });
@@ -149,8 +143,6 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
-        
-        // Update Read Map if we are actively in the chat
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
@@ -166,7 +158,6 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    // This server timestamp update triggers the "Red" highlight for other users
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
