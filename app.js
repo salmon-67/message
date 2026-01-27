@@ -20,7 +20,7 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH OBSERVER ---
+// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -36,11 +36,10 @@ onAuthStateChanged(auth, async (user) => {
     } else {
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
-        if(channelUnsub) channelUnsub();
     }
 });
 
-// --- SIDEBAR CHANNELS ---
+// --- CHANNELS SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
@@ -64,7 +63,7 @@ function loadChannels() {
     });
 }
 
-// --- MAIN CHAT LOGIC ---
+// --- OPEN CHAT & MEMBER LIST ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -88,19 +87,18 @@ function openChat(id, name) {
 
     loadChannels();
 
-    // --- MEMBER LIST SNAPSHOT (Strict Duplication Fix) ---
+    // --- MEMBER LIST SNAPSHOT (NO DUPLICATES FIX) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const container = document.getElementById('member-list');
-        container.innerHTML = ""; // Clear everything (Members + Admin UI)
+        // 1. Wipe everything (Members + Input)
+        container.innerHTML = ""; 
         
         const data = docSnap.data();
         if (!data) return;
 
-        // Create a list for members so we don't interfere with the Admin UI
-        const memberListDiv = document.createElement('div');
-        container.appendChild(memberListDiv);
-
-        for (let uid of (data.members || [])) {
+        // 2. Add Members
+        const mIds = data.members || [];
+        for (let uid of mIds) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -112,21 +110,23 @@ function openChat(id, name) {
                     <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}');">
                         <b>${u.username}</b> ${u.verified ? "✅" : ""}
                     </div>`;
-                memberListDiv.appendChild(item);
+                container.appendChild(item);
             }
         }
 
-        // Add User UI (Re-created only once per snapshot)
+        // 3. Add Admin UI exactly ONCE at the bottom
         if (name !== 'announcements' && currentUser.admin === true) {
             const adminBox = document.createElement('div');
+            adminBox.id = "admin-ui-box"; // Fixed ID
             adminBox.style = "margin-top:20px; border-top:1px solid #333; padding-top:15px;";
             adminBox.innerHTML = `
                 <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
                 <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
-                <div id="add-err" style="color:var(--danger); font-size:10px; margin-top:5px;"></div>
+                <div id="add-err" style="color:#ef4444; font-size:10px; margin-top:5px;"></div>
             `;
             container.appendChild(adminBox);
 
+            // Re-bind click event every time the element is redrawn
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
                 const errDiv = document.getElementById('add-err');
@@ -137,16 +137,17 @@ function openChat(id, name) {
                 
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
-                    document.getElementById('target-name').value = "";
-                    errDiv.innerText = "";
+                    errDiv.innerText = "Added!";
+                    errDiv.style.color = "#22c55e";
                 } else { 
                     errDiv.innerText = "User not found"; 
+                    errDiv.style.color = "#ef4444";
                 }
             };
         }
     });
 
-    // --- MESSAGE LIST SNAPSHOT ---
+    // --- MESSAGES ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
@@ -159,15 +160,10 @@ function openChat(id, name) {
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
-
-        if (activeChatId === id) {
-            lastReadMap[id] = Date.now();
-            localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-        }
     });
 }
 
-// --- BUTTON CLICKS ---
+// --- SEND MESSAGE ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
@@ -176,10 +172,11 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    // This triggers the member list update, but our innerHTML = "" now handles it.
+    // This updates the document, triggering the redrawn sidebar/member list
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
+// --- AUTH LOGIC ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
