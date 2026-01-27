@@ -20,7 +20,7 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH OBSERVER ---
+// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -39,20 +39,17 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR (GLITCH-FREE) ---
+// --- SIDEBAR (STABILIZED) ---
 function loadChannels() {
-    // Kill old listener to prevent multiple triggers/flickering
     if (channelUnsub) channelUnsub();
-
-    const q = query(
-        collection(db, "conversations"), 
-        where("members", "array-contains", currentUser.id), 
-        orderBy("lastUpdated", "desc")
-    );
+    
+    // Keeping descending order, but we ensure the UI doesn't jump by using a fragment
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
-        list.innerHTML = ""; 
+        const fragment = document.createDocumentFragment();
+        
         snap.forEach(d => {
             const data = d.data();
             const isSelected = activeChatId === d.id;
@@ -63,15 +60,16 @@ function loadChannels() {
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
             btn.innerText = `# ${data.name}`;
-            btn.onclick = () => {
-                if (activeChatId !== d.id) openChat(d.id, data.name);
-            };
-            list.appendChild(btn);
+            btn.onclick = () => { if (activeChatId !== d.id) openChat(d.id, data.name); };
+            fragment.appendChild(btn);
         });
+        
+        list.innerHTML = ""; 
+        list.appendChild(fragment);
     });
 }
 
-// --- OPEN CHAT (CLEAN UI) ---
+// --- OPEN CHAT ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -83,9 +81,23 @@ function openChat(id, name) {
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    loadChannels(); // Sync sidebar selection
+    // LEAVE BUTTON LOGIC (ADDED BACK)
+    const leaveBtn = document.getElementById('btn-leave-chat');
+    if (leaveBtn) {
+        leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
+        leaveBtn.onclick = async () => {
+            if (confirm(`Leave #${name}?`)) {
+                await updateDoc(doc(db, "conversations", id), { members: arrayRemove(currentUser.id) });
+                activeChatId = null;
+                document.getElementById('messages-box').innerHTML = "";
+                document.getElementById('chat-title').innerText = "Select a channel";
+                loadChannels();
+            }
+        };
+    }
 
-    // Hard reset Sidebar Structure to prevent duplication
+    loadChannels();
+
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -99,7 +111,6 @@ function openChat(id, name) {
 
     if(name === 'announcements') document.getElementById('static-add-ui').style.display = 'none';
 
-    // Everyone can add members
     document.getElementById('btn-add-member').onclick = async () => {
         const val = document.getElementById('target-name').value.trim();
         if(!val) return;
@@ -121,17 +132,15 @@ function openChat(id, name) {
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const memberListDiv = document.getElementById('member-list');
         if (!memberListDiv) return;
-
         const data = docSnap.data();
         if (!data || !data.members) return;
 
         const fragment = document.createDocumentFragment();
-        const seenIds = new Set(); // Prevent duplicate username rendering
+        const seenIds = new Set(); 
 
         for (let uid of data.members) {
             if (seenIds.has(uid)) continue; 
             seenIds.add(uid);
-
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -167,7 +176,6 @@ function openChat(id, name) {
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-            loadChannels(); 
         }
     });
 }
@@ -178,7 +186,6 @@ document.getElementById('btn-send').onclick = async () => {
     const text = input.value.trim();
     if (!text || !activeChatId) return;
 
-    // Set local unread buffer
     lastReadMap[activeChatId] = Date.now() + 5000;
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
@@ -187,10 +194,9 @@ document.getElementById('btn-send').onclick = async () => {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
-    loadChannels();
 };
 
-// --- AUTH ---
+// --- REST OF CODE (SIGNIN/CREATE) ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
