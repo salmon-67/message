@@ -20,7 +20,6 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -39,7 +38,6 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- CHANNELS SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
@@ -63,12 +61,12 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT & MEMBER LIST ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
+    // Mark as read immediately when opening
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
@@ -87,37 +85,29 @@ function openChat(id, name) {
 
     loadChannels();
 
-    // --- MEMBER LIST SNAPSHOT (NO DUPLICATES FIX) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const container = document.getElementById('member-list');
-        // 1. Wipe everything (Members + Input)
-        container.innerHTML = ""; 
+        container.innerHTML = ""; // Clear for fresh draw
         
         const data = docSnap.data();
         if (!data) return;
 
-        // 2. Add Members
-        const mIds = data.members || [];
-        for (let uid of mIds) {
+        // Render Members
+        for (let uid of (data.members || [])) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
                 const item = document.createElement('div');
                 item.className = "member-item";
-                item.innerHTML = `
-                    <div class="status-dot ${isOnline ? 'online' : ''}"></div>
-                    <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}');">
-                        <b>${u.username}</b> ${u.verified ? "✅" : ""}
-                    </div>`;
+                item.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
                 container.appendChild(item);
             }
         }
 
-        // 3. Add Admin UI exactly ONCE at the bottom
+        // Add Admin UI (Controlled injection)
         if (name !== 'announcements' && currentUser.admin === true) {
             const adminBox = document.createElement('div');
-            adminBox.id = "admin-ui-box"; // Fixed ID
             adminBox.style = "margin-top:20px; border-top:1px solid #333; padding-top:15px;";
             adminBox.innerHTML = `
                 <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
@@ -126,28 +116,18 @@ function openChat(id, name) {
             `;
             container.appendChild(adminBox);
 
-            // Re-bind click event every time the element is redrawn
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
-                const errDiv = document.getElementById('add-err');
-                if(!nameIn) return;
-
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
                 const snapU = await getDocs(qU);
-                
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
-                    errDiv.innerText = "Added!";
-                    errDiv.style.color = "#22c55e";
-                } else { 
-                    errDiv.innerText = "User not found"; 
-                    errDiv.style.color = "#ef4444";
-                }
+                    document.getElementById('target-name').value = "";
+                } else { document.getElementById('add-err').innerText = "Not found"; }
             };
         }
     });
 
-    // --- MESSAGES ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
@@ -158,25 +138,33 @@ function openChat(id, name) {
             const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
             div.innerHTML = `<div class="msg-meta">${m.senderName} • ${t}</div><div class="bubble">${m.content}</div>`;
             box.appendChild(div);
+            
+            // If the latest message is from ME, update my lastReadMap so it doesn't turn red
+            if (m.senderId === currentUser.id) {
+                lastReadMap[id] = Date.now();
+                localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+            }
         });
         box.scrollTop = box.scrollHeight;
     });
 }
 
-// --- SEND MESSAGE ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
     input.value = "";
+    
+    // Update local read map BEFORE sending so the incoming snapshot doesn't trigger "unread"
+    lastReadMap[activeChatId] = Date.now() + 2000; 
+    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    // This updates the document, triggering the redrawn sidebar/member list
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH LOGIC ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
