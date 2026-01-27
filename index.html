@@ -36,8 +36,11 @@
         .bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px; max-width: 85%; background: var(--bg-input); }
         .msg-row.me .bubble { background: var(--accent); color: white; border-bottom-right-radius: 2px; }
 
-        .channel-btn { padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--text-dim); margin-bottom: 4px; font-size: 14px; }
-        .channel-btn.active { background: var(--accent); color: white; font-weight: 600; }
+        /* CHANNEL BUTTON STATES */
+        .channel-btn { padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--text-dim); margin-bottom: 4px; font-size: 14px; transition: 0.2s; }
+        .channel-btn.active { background: var(--accent) !important; color: white !important; font-weight: 600; }
+        .channel-btn.unread { color: var(--danger); font-weight: 800; }
+        .channel-btn.unread::after { content: " •"; }
         
         .member-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; font-size: 13px; }
         .status-dot { width: 8px; height: 8px; border-radius: 50%; background: gray; }
