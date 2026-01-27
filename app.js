@@ -19,7 +19,6 @@ let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 
-// --- AUTH ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -39,12 +38,11 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR (Fixed Duplication) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     channelUnsub = onSnapshot(query(collection(db, "conversations"), where("members", "array-contains", currentUser.id)), (snap) => {
         const list = document.getElementById('channel-list');
-        list.innerHTML = "";
+        list.innerHTML = ""; 
         snap.forEach(d => {
             const btn = document.createElement('div');
             btn.className = `channel-btn ${activeChatId === d.id ? 'active' : ''}`;
@@ -55,9 +53,9 @@ function loadChannels() {
     });
 }
 
-// --- CHAT ---
 function openChat(id, name) {
-    if (msgUnsub) msgUnsub(); if (memberUnsub) memberUnsub();
+    if (msgUnsub) msgUnsub(); 
+    if (memberUnsub) memberUnsub();
     activeChatId = id;
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
@@ -67,50 +65,67 @@ function openChat(id, name) {
     leaveBtn.onclick = async () => {
         if(confirm("Leave group?")) {
             await updateDoc(doc(db, "conversations", id), { members: arrayRemove(currentUser.id) });
-            location.reload(); 
+            activeChatId = null;
+            document.getElementById('messages-box').innerHTML = "";
+            document.getElementById('chat-title').innerText = "# Select Channel";
+            leaveBtn.style.display = "none";
         }
     };
 
-    // MEMBER LIST & ADD BY USERNAME
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const list = document.getElementById('member-list');
-        list.innerHTML = "";
+        list.innerHTML = ""; // FIX: Wipes duplicates before rebuilding
+        
         const mIds = docSnap.data()?.members || [];
         for (let uid of mIds) {
-            const u = (await getDoc(doc(db, "users", uid))).data();
-            const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
-            const d = document.createElement('div');
-            d.className = "member-item";
-            d.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div>
-                           <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}'); alert('Copied Username')">
-                           <b>${u.username}</b> ${u.verified ? "✅" : ""}</div>`;
-            list.appendChild(d);
+            const uDoc = await getDoc(doc(db, "users", uid));
+            if (uDoc.exists()) {
+                const u = uDoc.data();
+                const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
+                const d = document.createElement('div');
+                d.className = "member-item";
+                d.innerHTML = `
+                    <div class="status-dot ${isOnline ? 'online' : ''}"></div>
+                    <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}'); alert('Copied: ${u.username}')">
+                        <b>${u.username}</b> ${u.verified ? "✅" : ""}
+                    </div>`;
+                list.appendChild(d);
+            }
         }
 
-        if (name !== 'announcements' && currentUser.admin) {
+        if (name !== 'announcements' && currentUser.admin === true) {
             const addUI = document.createElement('div');
-            addUI.innerHTML = `<input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-top:10px;">
-                               <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:5px;">Add Member</button>
-                               <div id="add-err" style="color:red; font-size:10px;"></div>`;
+            addUI.style = "margin-top:15px; border-top: 1px solid #333; padding-top:10px;";
+            addUI.innerHTML = `
+                <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
+                <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
+                <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>`;
             list.appendChild(addUI);
+
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
+                const err = document.getElementById('add-err');
+                if (!nameIn) return;
+
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
                 const snapU = await getDocs(qU);
+                
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
                     document.getElementById('target-name').value = "";
-                } else { document.getElementById('add-err').innerText = "Not found"; }
+                    err.innerText = "";
+                } else { err.innerText = "Not found"; }
             };
         }
     });
 
-    // MESSAGES
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
-        const box = document.getElementById('messages-box'); box.innerHTML = "";
+        const box = document.getElementById('messages-box'); 
+        box.innerHTML = "";
         snap.forEach(d => {
             const m = d.data();
-            const div = document.createElement('div'); div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
+            const div = document.createElement('div'); 
+            div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
             const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
             div.innerHTML = `<div class="msg-meta">${m.senderName} • ${t}</div><div class="bubble">${m.content}</div>`;
             box.appendChild(div);
@@ -119,7 +134,6 @@ function openChat(id, name) {
     });
 }
 
-// --- ACTIONS ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
