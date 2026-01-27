@@ -38,7 +38,6 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR: HANDLING RED/BLUE HIGHLIGHTS ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
@@ -51,8 +50,6 @@ function loadChannels() {
             const isSelected = activeChatId === d.id;
             const lastUpdated = data.lastUpdated?.toMillis() || 0;
             const lastViewed = lastReadMap[d.id] || 0;
-            
-            // Channel is RED if there's a new message and we aren't currently looking at it
             const isUnread = !isSelected && lastUpdated > lastViewed;
 
             const btn = document.createElement('div');
@@ -64,37 +61,74 @@ function loadChannels() {
     });
 }
 
-// --- MAIN CHAT: FIXING DUPLICATION ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
-    
-    // Update local read time immediately
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    const leaveBtn = document.getElementById('btn-leave-chat');
-    leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
+    loadChannels();
 
-    loadChannels(); // Refresh highlights
+    // SETUP SIDEBAR STRUCTURE TO PREVENT DUPLICATION
+    const sidebar = document.getElementById('sidebar-right');
+    sidebar.innerHTML = `
+        <div class="header">MEMBERS</div>
+        <div id="member-list" class="scroll-area"></div>
+        <div id="add-member-ui" style="padding:15px; border-top:var(--border);">
+            <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-bottom:5px;">
+            <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
+            <div id="add-err" style="color:var(--danger); font-size:10px; margin-top:5px;"></div>
+        </div>
+    `;
 
-    // MEMBERS SNAPSHOT
+    // HIDDEN ADD UI FOR ANNOUNCEMENTS
+    if(name === 'announcements') document.getElementById('add-member-ui').style.display = 'none';
+
+    // BIND ADD MEMBER BUTTON (ONCE)
+    document.getElementById('btn-add-member').onclick = async () => {
+        const targetName = document.getElementById('target-name').value.trim();
+        if(!targetName) return;
+        
+        const qU = query(collection(db, "users"), where("username", "==", targetName), limit(1));
+        const snapU = await getDocs(qU);
+        
+        if (!snapU.empty) {
+            const newUser = snapU.docs[0].data();
+            const newUserId = snapU.docs[0].id;
+            
+            await updateDoc(doc(db, "conversations", id), { 
+                members: arrayUnion(newUserId),
+                lastUpdated: serverTimestamp() 
+            });
+
+            // SEND SYSTEM MESSAGE
+            await addDoc(collection(db, "conversations", id, "messages"), {
+                content: `${currentUser.username} added ${newUser.username} to the chat`,
+                senderId: "system",
+                senderName: "System",
+                timestamp: serverTimestamp()
+            });
+
+            document.getElementById('target-name').value = "";
+            document.getElementById('add-err').innerText = "";
+        } else {
+            document.getElementById('add-err').innerText = "User not found";
+        }
+    };
+
+    // MEMBER LIST LISTENER
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const list = document.getElementById('member-list');
-        // VITAL: Wipe the entire sidebar area before redrawing
         list.innerHTML = ""; 
-        
         const data = docSnap.data();
         if (!data) return;
 
-        // 1. Render actual members
-        const membersList = data.members || [];
-        for (let uid of membersList) {
+        for (let uid of (data.members || [])) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -105,61 +139,42 @@ function openChat(id, name) {
                 list.appendChild(item);
             }
         }
-
-        // 2. Render Admin Box ONCE at the very bottom of the same list
-        if (name !== 'announcements' && currentUser.admin === true) {
-            const adminUI = document.createElement('div');
-            adminUI.style = "margin-top:20px; border-top:1px solid #333; padding-top:15px;";
-            adminUI.innerHTML = `
-                <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
-                <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
-                <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
-            `;
-            list.appendChild(adminUI);
-
-            // Re-assign logic to the new button
-            document.getElementById('btn-add-member').onclick = async () => {
-                const nameIn = document.getElementById('target-name').value.trim();
-                const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
-                const snapU = await getDocs(qU);
-                if (!snapU.empty) {
-                    await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
-                    document.getElementById('target-name').value = "";
-                } else { document.getElementById('add-err').innerText = "Not found"; }
-            };
-        }
     });
 
-    // MESSAGES SNAPSHOT
+    // MESSAGE LISTENER
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
-        box.innerHTML = "";
+        box.innerHTML = ""; 
         snap.forEach(d => {
             const m = d.data();
             const div = document.createElement('div'); 
-            div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
-            const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
-            div.innerHTML = `<div class="msg-meta">${m.senderName} • ${t}</div><div class="bubble">${m.content}</div>`;
+            // Style system messages differently
+            if(m.senderId === "system") {
+                div.style = "text-align:center; font-size:11px; color:var(--text-dim); margin: 10px 0;";
+                div.innerHTML = `<i>${m.content}</i>`;
+            } else {
+                div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
+                const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
+                div.innerHTML = `<div class="msg-meta">${m.senderName} • ${t}</div><div class="bubble">${m.content}</div>`;
+            }
             box.appendChild(div);
         });
         box.scrollTop = box.scrollHeight;
         
-        // If message is new and we are in the chat, mark read so it doesn't turn red
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+            loadChannels(); 
         }
     });
 }
 
-// --- SENDING MESSAGES (UNREAD SENDER FIX) ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
 
-    // 1. Pre-mark as read so the server response doesn't trigger "Unread" color for YOU
-    lastReadMap[activeChatId] = Date.now() + 2000; 
+    lastReadMap[activeChatId] = Date.now() + 5000;
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     input.value = "";
@@ -167,11 +182,11 @@ document.getElementById('btn-send').onclick = async () => {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
     
-    // 2. Update doc (Triggers Red for everyone else)
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
+    loadChannels();
 };
 
-// --- REST OF THE FUNCTIONS ---
+// AUTH/CHANNEL CREATION
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
