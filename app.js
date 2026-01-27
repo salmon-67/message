@@ -19,21 +19,22 @@ let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
 
-// --- AUTH STATE & AUTO-JOIN ---
+// --- AUTH & INITIALIZATION ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userRef = doc(db, "users", user.uid);
         const userSnap = await getDoc(userRef);
         
         if (!userSnap.exists()) {
-            signOut(auth);
+            await signOut(auth);
             return;
         }
 
         currentUser = { id: user.uid, ...userSnap.data() };
         document.getElementById('my-name').innerText = currentUser.username;
         
-        if (currentUser.admin) {
+        // This is why the panel might not open: check your Firestore 'admin' field!
+        if (currentUser.admin === true) {
             document.getElementById('btn-open-admin').style.display = 'block';
         }
 
@@ -48,15 +49,14 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- LOGIN/REGISTER ACTIONS ---
+// --- LOGIN LOGIC ---
 document.getElementById('btn-signin').addEventListener('click', async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
-    if (!u || !p) return;
     try {
         await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p);
     } catch (e) {
-        document.getElementById('login-error').innerText = "Failed: Check credentials.";
+        document.getElementById('login-error').innerText = "Login Failed: " + e.code;
     }
 });
 
@@ -73,13 +73,12 @@ document.getElementById('btn-register').onclick = async () => {
 
 document.getElementById('btn-logout').onclick = () => signOut(auth);
 
-// --- CHANNEL MANAGEMENT ---
+// --- CHANNEL LOGIC ---
 async function autoJoinAnnouncements() {
     const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
     const snap = await getDocs(q);
     if (!snap.empty) {
-        const annId = snap.docs[0].id;
-        await updateDoc(doc(db, "conversations", annId), { members: arrayUnion(currentUser.id) });
+        await updateDoc(doc(db, "conversations", snap.docs[0].id), { members: arrayUnion(currentUser.id) });
     } else {
         await addDoc(collection(db, "conversations"), { name: "announcements", members: [currentUser.id], lastUpdated: serverTimestamp() });
     }
@@ -100,12 +99,10 @@ function loadChannels() {
     });
 }
 
-async function openChat(id, name) {
+function openChat(id, name) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
     document.getElementById('chat-title').innerText = `# ${name}`;
-    
-    // Admin only for announcements
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
 
     updateMemberList(id);
@@ -115,17 +112,14 @@ async function openChat(id, name) {
         box.innerHTML = "";
         snap.forEach(d => {
             const m = d.data();
-            const isMe = m.senderId === currentUser.id;
             const div = document.createElement('div');
-            div.className = `msg-row ${isMe ? 'me' : 'them'}`;
-            div.innerHTML = `
-                <div style="font-size:10px; opacity:0.5;">${m.senderName}</div>
-                <div class="bubble">${m.content}</div>
-            `;
+            div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
+            div.innerHTML = `<div style="font-size:10px; opacity:0.5;">${m.senderName}</div><div class="bubble">${m.content}</div>`;
+            
             if (currentUser.admin) {
                 const del = document.createElement('button');
-                del.innerText = "Delete";
-                del.style = "font-size:9px; color:red; background:none; border:none; cursor:pointer;";
+                del.innerText = "×";
+                del.style = "color:red; background:none; border:none; cursor:pointer;";
                 del.onclick = () => deleteDoc(doc(db, "conversations", id, "messages", d.id));
                 div.appendChild(del);
             }
@@ -135,7 +129,80 @@ async function openChat(id, name) {
     });
 }
 
-// --- MESSAGE SEND ---
+// --- ADDING USERS TO GROUPS ---
+async function updateMemberList(chatId) {
+    const snap = await getDoc(doc(db, "conversations", chatId));
+    const currentMembers = snap.data().members || [];
+    const list = document.getElementById('member-list');
+    list.innerHTML = "";
+
+    // Show current members
+    for (let uid of currentMembers) {
+        const uSnap = await getDoc(doc(db, "users", uid));
+        if (uSnap.exists()) {
+            const div = document.createElement('div');
+            div.style = "padding:5px; border-bottom:1px solid #222; font-size:12px;";
+            div.innerText = uSnap.data().username;
+            list.appendChild(div);
+        }
+    }
+
+    // Admins get an "Invite" tool in the sidebar
+    if (currentUser.admin) {
+        const inviteDiv = document.createElement('div');
+        inviteDiv.style = "margin-top:20px; padding:10px; background:var(--bg-input); border-radius:8px;";
+        inviteDiv.innerHTML = `
+            <small>Add User by ID</small>
+            <input type="text" id="invite-uid" class="input-box" style="font-size:10px; padding:5px;">
+            <button id="btn-invite-now" class="btn btn-primary" style="padding:5px; font-size:10px;">Add Member</button>
+        `;
+        list.appendChild(inviteDiv);
+
+        document.getElementById('btn-invite-now').onclick = async () => {
+            const targetId = document.getElementById('invite-uid').value.trim();
+            if (targetId) {
+                await updateDoc(doc(db, "conversations", chatId), { members: arrayUnion(targetId) });
+                alert("User added!");
+                updateMemberList(chatId);
+            }
+        };
+    }
+}
+
+// --- MASTER ADMIN PANEL ---
+document.getElementById('btn-open-admin').onclick = async () => {
+    const overlay = document.getElementById('admin-overlay');
+    overlay.style.display = 'flex';
+    const list = document.getElementById('admin-user-list');
+    list.innerHTML = "Fetching...";
+    
+    const snap = await getDocs(collection(db, "users"));
+    list.innerHTML = "";
+    snap.forEach(d => {
+        const u = d.data();
+        const row = document.createElement('div');
+        row.style = "padding:10px; border-bottom:1px solid #333; font-size:11px;";
+        row.innerHTML = `
+            <div><b>${u.username}</b></div>
+            <code style="color:var(--accent);">${d.id}</code><br>
+            <button onclick="window.adminVerify('${d.id}', ${u.verified})">Verify</button>
+            <button onclick="window.adminKick('${d.id}')" style="color:red;">KICK</button>
+            <input type="text" id="ren-${d.id}" placeholder="Rename">
+            <button onclick="window.adminRename('${d.id}')">Go</button>
+        `;
+        list.appendChild(row);
+    });
+};
+
+// Global Admin Helpers
+window.adminVerify = async (id, cur) => { await updateDoc(doc(db, "users", id), { verified: !cur }); document.getElementById('btn-open-admin').click(); };
+window.adminKick = async (id) => { if(confirm("Kick?")) await deleteDoc(doc(db, "users", id)); document.getElementById('btn-open-admin').click(); };
+window.adminRename = async (id) => { 
+    const n = document.getElementById(`ren-${id}`).value;
+    if(n) await updateDoc(doc(db, "users", id), { username: n });
+    document.getElementById('btn-open-admin').click();
+};
+
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
@@ -144,58 +211,12 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
-    updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
-};
-
-// --- USER LIST (RIGHT SIDEBAR) ---
-async function updateMemberList(chatId) {
-    const snap = await getDoc(doc(db, "conversations", chatId));
-    const members = snap.data().members || [];
-    const list = document.getElementById('member-list');
-    list.innerHTML = "";
-    for (let uid of members) {
-        const uSnap = await getDoc(doc(db, "users", uid));
-        if (uSnap.exists()) {
-            const div = document.createElement('div');
-            div.style = "padding:5px; font-size:13px;";
-            div.innerText = uSnap.data().username + (uSnap.data().verified ? " ✅" : "");
-            list.appendChild(div);
-        }
-    }
-}
-
-// --- ADMIN PANEL FUNCTIONS ---
-document.getElementById('btn-open-admin').onclick = async () => {
-    document.getElementById('admin-overlay').style.display = 'flex';
-    const list = document.getElementById('admin-user-list');
-    list.innerHTML = "Fetching...";
-    const snap = await getDocs(collection(db, "users"));
-    list.innerHTML = "";
-    snap.forEach(d => {
-        const u = d.data();
-        if (d.id === currentUser.id) return;
-        const row = document.createElement('div');
-        row.style = "padding:10px; border-bottom:1px solid #222;";
-        row.innerHTML = `
-            <div><b>${u.username}</b></div>
-            <button class="admin-action-btn" style="background:orange" onclick="window.adminVerify('${d.id}', ${u.verified})">Toggle Verify</button>
-            <button class="admin-action-btn" style="background:red" onclick="window.adminKick('${d.id}')">KICK</button>
-            <input type="text" placeholder="New Name" id="ren-${d.id}" style="width:60px; font-size:10px;">
-            <button class="admin-action-btn" style="background:grey" onclick="window.adminRename('${d.id}')">Rename</button>
-        `;
-        list.appendChild(row);
-    });
-};
-
-window.adminVerify = async (id, current) => { await updateDoc(doc(db, "users", id), { verified: !current }); document.getElementById('btn-open-admin').click(); };
-window.adminKick = async (id) => { if(confirm("Kick?")) await deleteDoc(doc(db, "users", id)); document.getElementById('btn-open-admin').click(); };
-window.adminRename = async (id) => { 
-    const val = document.getElementById(`ren-${id}`).value;
-    if(val) await updateDoc(doc(db, "users", id), { username: val });
-    document.getElementById('btn-open-admin').click();
 };
 
 document.getElementById('btn-create').onclick = async () => {
-    const n = document.getElementById('new-channel-name').value;
-    if(n) await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.id], lastUpdated: serverTimestamp() });
+    const n = document.getElementById('new-channel-name').value.trim();
+    if(n) {
+        await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.id], lastUpdated: serverTimestamp() });
+        document.getElementById('new-channel-name').value = "";
+    }
 };
