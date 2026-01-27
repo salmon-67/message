@@ -38,27 +38,25 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR (REPAIRED) ---
+// --- SIDEBAR: FIXED CHANNELS ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
-    // Using a simpler query to ensure it loads without needing a complex index
+    // Basic query (prevents Index errors)
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
-        list.innerHTML = ""; 
-        
-        // Sort in memory to prevent Firebase Index errors and jumping
         const docs = [];
         snap.forEach(d => docs.push({id: d.id, ...d.data()}));
+        
+        // Sort by time in JS so the UI doesn't crash or flicker
         docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
 
+        list.innerHTML = ""; 
         docs.forEach(data => {
             const isSelected = activeChatId === data.id;
-            const lastUpdated = data.lastUpdated?.toMillis() || 0;
-            const lastViewed = lastReadMap[data.id] || 0;
-            const isUnread = !isSelected && lastUpdated > lastViewed;
+            const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
 
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
@@ -81,7 +79,7 @@ function openChat(id, name) {
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // LEAVE BUTTON (RESTORED)
+    // LEAVE BUTTON
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
@@ -96,6 +94,7 @@ function openChat(id, name) {
         };
     }
 
+    // RESET SIDEBAR UI
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -122,33 +121,31 @@ function openChat(id, name) {
                 content: `${currentUser.username} added ${newName}`, senderId: "system", senderName: "System", timestamp: serverTimestamp()
             });
             document.getElementById('target-name').value = "";
-            document.getElementById('add-err').innerText = "";
-        } else { document.getElementById('add-err').innerText = "User not found"; }
+        }
     };
 
-    // --- MEMBER LISTENER ---
+    // --- MEMBER LISTENER (DE-DUPLICATED) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
-        const memberListDiv = document.getElementById('member-list');
-        if (!memberListDiv) return;
+        const listDiv = document.getElementById('member-list');
         const data = docSnap.data();
-        if (!data || !data.members) return;
+        if (!data || !listDiv) return;
 
         const fragment = document.createDocumentFragment();
-        const uniqueMembers = [...new Set(data.members)];
+        const uniqueIds = [...new Set(data.members)];
 
-        for (let uid of uniqueMembers) {
+        for (let uid of uniqueIds) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
-                const item = document.createElement('div');
-                item.className = "member-item";
-                item.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
-                fragment.appendChild(item);
+                const d = document.createElement('div');
+                d.className = "member-item";
+                d.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
+                fragment.appendChild(d);
             }
         }
-        memberListDiv.innerHTML = ""; 
-        memberListDiv.appendChild(fragment);
+        listDiv.innerHTML = ""; 
+        listDiv.appendChild(fragment);
     });
 
     // --- MESSAGE LISTENER ---
@@ -170,9 +167,11 @@ function openChat(id, name) {
         });
         box.scrollTop = box.scrollHeight;
     });
+    
+    loadChannels(); // Refresh active state
 }
 
-// --- SEND MESSAGE ---
+// --- SEND ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
@@ -189,7 +188,7 @@ document.getElementById('btn-send').onclick = async () => {
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
-    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { }
+    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) {}
 };
 
 document.getElementById('btn-register').onclick = async () => {
@@ -197,8 +196,8 @@ document.getElementById('btn-register').onclick = async () => {
     const p = document.getElementById('login-pass').value;
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        await setDoc(doc(db, "users", res.user.uid), { username: u, admin: false, verified: false, lastSeen: serverTimestamp() });
-    } catch(e) { }
+        await setDoc(doc(db, "users", res.user.uid), { username: u, admin: false, lastSeen: serverTimestamp() });
+    } catch(e) {}
 };
 
 document.getElementById('btn-create').onclick = async () => {
