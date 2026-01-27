@@ -20,7 +20,6 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH OBSERVER ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const userSnap = await getDoc(doc(db, "users", user.uid));
@@ -36,11 +35,10 @@ onAuthStateChanged(auth, async (user) => {
     } else {
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
-        if(channelUnsub) channelUnsub();
     }
 });
 
-// --- LOAD CHANNELS (UNREAD FIX) ---
+// --- SIDEBAR: HANDLING RED/BLUE HIGHLIGHTS ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id), orderBy("lastUpdated", "desc"));
@@ -51,12 +49,10 @@ function loadChannels() {
         snap.forEach(d => {
             const data = d.data();
             const isSelected = activeChatId === d.id;
-            
-            // Logic: Is the message newer than our last click?
             const lastUpdated = data.lastUpdated?.toMillis() || 0;
             const lastViewed = lastReadMap[d.id] || 0;
             
-            // Channel is unread ONLY if it's NOT selected AND there's a newer message
+            // Channel is RED if there's a new message and we aren't currently looking at it
             const isUnread = !isSelected && lastUpdated > lastViewed;
 
             const btn = document.createElement('div');
@@ -68,14 +64,14 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT (DUPLICATION FIX) ---
+// --- MAIN CHAT: FIXING DUPLICATION ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
     
-    // Mark as Read locally
+    // Update local read time immediately
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
@@ -85,42 +81,43 @@ function openChat(id, name) {
     const leaveBtn = document.getElementById('btn-leave-chat');
     leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
 
-    // Immediate Sidebar Refresh to clear highlight
-    loadChannels();
+    loadChannels(); // Refresh highlights
 
-    // --- MEMBERS LIST SNAPSHOT (Wipes Admin UI to prevent duplication) ---
+    // MEMBERS SNAPSHOT
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const list = document.getElementById('member-list');
-        list.innerHTML = ""; // FULL WIPE: Every time doc changes, we clear and redraw everything
+        // VITAL: Wipe the entire sidebar area before redrawing
+        list.innerHTML = ""; 
         
         const data = docSnap.data();
         if (!data) return;
 
-        // 1. Draw Members
-        const mIds = data.members || [];
-        for (let uid of mIds) {
+        // 1. Render actual members
+        const membersList = data.members || [];
+        for (let uid of membersList) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
-                const d = document.createElement('div');
-                d.className = "member-item";
-                d.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
-                list.appendChild(d);
+                const item = document.createElement('div');
+                item.className = "member-item";
+                item.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
+                list.appendChild(item);
             }
         }
 
-        // 2. Attach Admin UI exactly ONCE inside this snapshot
+        // 2. Render Admin Box ONCE at the very bottom of the same list
         if (name !== 'announcements' && currentUser.admin === true) {
-            const adminDiv = document.createElement('div');
-            adminDiv.style = "margin-top:20px; border-top:1px solid #333; padding-top:10px;";
-            adminDiv.innerHTML = `
+            const adminUI = document.createElement('div');
+            adminUI.style = "margin-top:20px; border-top:1px solid #333; padding-top:15px;";
+            adminUI.innerHTML = `
                 <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
                 <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
                 <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
             `;
-            list.appendChild(adminDiv);
+            list.appendChild(adminUI);
 
+            // Re-assign logic to the new button
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
@@ -133,7 +130,7 @@ function openChat(id, name) {
         }
     });
 
-    // --- MESSAGES SNAPSHOT ---
+    // MESSAGES SNAPSHOT
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = "";
@@ -147,7 +144,7 @@ function openChat(id, name) {
         });
         box.scrollTop = box.scrollHeight;
         
-        // If we are active in this chat, keep updating the read time
+        // If message is new and we are in the chat, mark read so it doesn't turn red
         if (activeChatId === id) {
             lastReadMap[id] = Date.now();
             localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
@@ -155,27 +152,26 @@ function openChat(id, name) {
     });
 }
 
-// --- SEND MESSAGE (UNREAD FIX) ---
+// --- SENDING MESSAGES (UNREAD SENDER FIX) ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
-    input.value = "";
-    
-    // 1. Update local read log BEFORE sending so we don't flag ourselves
-    lastReadMap[activeChatId] = Date.now() + 5000; // Add 5s buffer
-    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
 
-    // 2. Send Message
+    // 1. Pre-mark as read so the server response doesn't trigger "Unread" color for YOU
+    lastReadMap[activeChatId] = Date.now() + 2000; 
+    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
+    
+    input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
     
-    // 3. Update Conversation (This makes it unread for OTHERS)
+    // 2. Update doc (Triggers Red for everyone else)
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH LOGIC (KEEP SAME) ---
+// --- REST OF THE FUNCTIONS ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
