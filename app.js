@@ -88,15 +88,19 @@ function openChat(id, name) {
 
     loadChannels();
 
-    // --- MEMBER LIST SNAPSHOT (Fixes Duplication) ---
+    // --- MEMBER LIST SNAPSHOT (Strict Duplication Fix) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
-        const list = document.getElementById('member-list');
-        list.innerHTML = ""; // FULL WIPE: Prevents UI stacking when messages are sent
+        const container = document.getElementById('member-list');
+        container.innerHTML = ""; // Clear everything (Members + Admin UI)
         
         const data = docSnap.data();
-        const mIds = data?.members || [];
+        if (!data) return;
 
-        for (let uid of mIds) {
+        // Create a list for members so we don't interfere with the Admin UI
+        const memberListDiv = document.createElement('div');
+        container.appendChild(memberListDiv);
+
+        for (let uid of (data.members || [])) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
@@ -108,23 +112,24 @@ function openChat(id, name) {
                     <div style="flex:1; cursor:pointer;" onclick="navigator.clipboard.writeText('${u.username}');">
                         <b>${u.username}</b> ${u.verified ? "✅" : ""}
                     </div>`;
-                list.appendChild(item);
+                memberListDiv.appendChild(item);
             }
         }
 
-        // Add User Input: Re-appended once per snapshot update
+        // Add User UI (Re-created only once per snapshot)
         if (name !== 'announcements' && currentUser.admin === true) {
             const adminBox = document.createElement('div');
-            adminBox.style = "margin-top:20px; border-top:1px solid #333; padding-top:10px;";
+            adminBox.style = "margin-top:20px; border-top:1px solid #333; padding-top:15px;";
             adminBox.innerHTML = `
                 <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px;">
                 <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
                 <div id="add-err" style="color:var(--danger); font-size:10px; margin-top:5px;"></div>
             `;
-            list.appendChild(adminBox);
+            container.appendChild(adminBox);
 
             document.getElementById('btn-add-member').onclick = async () => {
                 const nameIn = document.getElementById('target-name').value.trim();
+                const errDiv = document.getElementById('add-err');
                 if(!nameIn) return;
 
                 const qU = query(collection(db, "users"), where("username", "==", nameIn), limit(1));
@@ -133,8 +138,9 @@ function openChat(id, name) {
                 if (!snapU.empty) {
                     await updateDoc(doc(db, "conversations", id), { members: arrayUnion(snapU.docs[0].id) });
                     document.getElementById('target-name').value = "";
+                    errDiv.innerText = "";
                 } else { 
-                    document.getElementById('add-err').innerText = "User not found"; 
+                    errDiv.innerText = "User not found"; 
                 }
             };
         }
@@ -170,6 +176,7 @@ document.getElementById('btn-send').onclick = async () => {
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
     });
+    // This triggers the member list update, but our innerHTML = "" now handles it.
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
