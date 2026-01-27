@@ -10,66 +10,79 @@
             --bg-body: #09090b; --bg-sidebar: #121214; --bg-chat: #1c1c1f;
             --bg-input: #27272a; --accent: #3b82f6; --text-main: #f4f4f5;
             --text-dim: #a1a1aa; --border: 1px solid rgba(255,255,255,0.1);
-            --danger: #ef4444;
+            --danger: #ef4444; --online: #22c55e;
         }
         * { box-sizing: border-box; font-family: 'Inter', sans-serif; }
         body { margin: 0; background: var(--bg-body); color: var(--text-main); height: 100dvh; overflow: hidden; display: flex; }
 
-        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 1000; display: flex; align-items: center; justify-content: center; }
-        .card { background: var(--bg-sidebar); border: var(--border); padding: 30px; border-radius: 16px; width: 90%; max-width: 400px; text-align: center; }
+        /* AUTH MODAL */
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); z-index: 2000; display: flex; align-items: center; justify-content: center; }
+        .card { background: var(--bg-sidebar); border: var(--border); padding: 35px; border-radius: 20px; width: 90%; max-width: 380px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
         
-        .input-box { width: 100%; padding: 12px; margin-bottom: 12px; background: var(--bg-input); border: 1px solid transparent; color: white; border-radius: 8px; outline: none; }
+        .input-box { width: 100%; padding: 12px; margin-bottom: 12px; background: var(--bg-input); border: 1px solid transparent; color: white; border-radius: 8px; outline: none; transition: 0.2s; }
+        .input-box:focus { border-color: var(--accent); }
         .btn { padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; width: 100%; transition: 0.2s; }
         .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); }
 
+        /* LAYOUT */
         #app-layout { display: none; width: 100%; height: 100%; }
         #sidebar-left { width: 260px; background: var(--bg-sidebar); border-right: var(--border); display: flex; flex-direction: column; }
         #main-chat { flex: 1; background: var(--bg-chat); display: flex; flex-direction: column; }
-        #sidebar-right { width: 220px; background: var(--bg-sidebar); border-left: var(--border); display: flex; flex-direction: column; }
+        #sidebar-right { width: 240px; background: var(--bg-sidebar); border-left: var(--border); display: flex; flex-direction: column; }
 
-        .header { height: 60px; display: flex; align-items: center; padding: 0 16px; border-bottom: var(--border); justify-content: space-between; }
+        .header { height: 60px; display: flex; align-items: center; padding: 0 16px; border-bottom: var(--border); font-weight: 700; }
         .scroll-area { flex: 1; overflow-y: auto; padding: 15px; }
 
-        .msg-row { display: flex; flex-direction: column; margin-bottom: 15px; }
+        /* MESSAGES */
+        .msg-row { display: flex; flex-direction: column; margin-bottom: 18px; }
         .msg-row.me { align-items: flex-end; }
-        .bubble { padding: 10px 15px; border-radius: 12px; font-size: 14px; max-width: 80%; background: var(--bg-input); }
-        .msg-row.me .bubble { background: var(--accent); color: white; }
+        .msg-meta { font-size: 11px; opacity: 0.5; margin-bottom: 4px; }
+        .bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px; max-width: 85%; background: var(--bg-input); line-height: 1.4; }
+        .msg-row.me .bubble { background: var(--accent); color: white; border-bottom-right-radius: 2px; }
+        .msg-row.them .bubble { border-bottom-left-radius: 2px; }
 
-        .channel-btn { padding: 10px; border-radius: 6px; cursor: pointer; color: var(--text-dim); margin-bottom: 5px; transition: 0.2s; }
-        .channel-btn:hover { background: rgba(255,255,255,0.05); }
-        .channel-btn.active { background: var(--accent); color: white; }
+        /* CHANNELS & MEMBERS */
+        .channel-btn { padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--text-dim); margin-bottom: 4px; font-size: 14px; transition: 0.2s; }
+        .channel-btn:hover { background: rgba(255,255,255,0.05); color: white; }
+        .channel-btn.active { background: var(--accent); color: white; font-weight: 600; }
+        
+        .member-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; font-size: 13px; margin-bottom: 2px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: gray; }
+        .status-dot.online { background: var(--online); box-shadow: 0 0 8px var(--online); }
     </style>
 </head>
 <body>
 
     <div id="login-overlay" class="overlay">
         <div class="card">
-            <h1 style="color:var(--accent); margin-top: 0;">Salmon</h1>
+            <h1 style="color:var(--accent); font-size: 28px; margin-bottom: 8px;">Salmon</h1>
+            <p style="color:var(--text-dim); font-size: 14px; margin-bottom: 24px;">Premium Messaging</p>
             <input type="text" id="login-user" class="input-box" placeholder="Username">
             <input type="password" id="login-pass" class="input-box" placeholder="Password">
             <button id="btn-signin" class="btn btn-primary">Sign In</button>
-            <button id="btn-register" style="background:none; border:none; color:var(--text-dim); margin-top:15px; cursor:pointer;">Create Account</button>
-            <div id="login-error" style="color:var(--danger); margin-top:10px; font-size:12px;"></div>
+            <button id="btn-register" style="background:none; border:none; color:var(--text-dim); margin-top:20px; cursor:pointer; font-size:13px;">Create new account</button>
+            <div id="login-error" style="color:var(--danger); margin-top:15px; font-size:12px; min-height: 15px;"></div>
         </div>
     </div>
 
     <div id="app-layout">
         <nav id="sidebar-left">
-            <div class="header"><b>SALMON</b></div>
+            <div class="header" style="color:var(--accent); letter-spacing: 1px;">SALMON</div>
             <div id="channel-list" class="scroll-area"></div>
             <div style="padding: 15px; border-top: var(--border);">
-                <input id="new-channel-name" class="input-box" placeholder="New # channel" style="margin-bottom: 5px;">
-                <button id="btn-create" class="btn btn-primary">Create</button>
+                <input id="new-channel-name" class="input-box" placeholder="New #channel" style="font-size: 13px;">
+                <button id="btn-create" class="btn btn-primary" style="padding: 8px;">Create</button>
             </div>
-            <div style="padding:15px; font-size:12px;">
-                <span id="my-name"></span>
-                <button id="btn-logout" style="color:var(--danger); border:none; background:none; cursor:pointer; float:right;">Logout</button>
+            <div style="padding:15px; background: rgba(0,0,0,0.2); border-top: var(--border);">
+                <div id="my-name" style="font-weight: 600; font-size: 13px;"></div>
+                <button id="btn-logout" style="color:var(--danger); border:none; background:none; cursor:pointer; font-size:11px; padding:0; margin-top:4px;">Logout</button>
             </div>
         </nav>
 
         <main id="main-chat">
             <header class="header">
-                <span id="chat-title"># Channel</span>
+                <span id="chat-title"># Select a channel</span>
             </header>
             <div id="messages-box" class="scroll-area"></div>
             <div id="input-area" style="padding: 20px; display:none; border-top: var(--border);">
@@ -81,7 +94,7 @@
         </main>
 
         <aside id="sidebar-right">
-            <div class="header"><b>MEMBERS</b></div>
+            <div class="header">MEMBERS</div>
             <div id="member-list" class="scroll-area"></div>
         </aside>
     </div>
