@@ -38,10 +38,11 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR: RE-ORDERING & READ STATUS FIX ---
+// --- SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     
+    // Server-side filter: Only get chats where I am a member
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
     channelUnsub = onSnapshot(q, (snap) => {
@@ -49,17 +50,12 @@ function loadChannels() {
         const docs = [];
         snap.forEach(d => docs.push({id: d.id, ...d.data()}));
         
-        // 1. RE-ADD ORDERING: Sort by most recent message
         docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
 
         list.innerHTML = ""; 
         docs.forEach(data => {
             const isSelected = activeChatId === data.id;
-            const lastUpdated = data.lastUpdated?.toMillis() || 0;
-            const lastViewed = lastReadMap[data.id] || 0;
-            
-            // 2. FIX READ STATUS: Red only if there's a new message AND it's not the active chat
-            const isUnread = !isSelected && lastUpdated > lastViewed;
+            const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
 
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
@@ -70,34 +66,28 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT ---
+// --- OPEN CHAT (WITH SECURITY CHECK) ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
-    
-    // 3. IMMEDIATELY MARK AS READ
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     document.getElementById('chat-title').innerText = `# ${name}`;
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // Refresh sidebar so the red dot disappears instantly
     loadChannels();
 
-    // LEAVE BUTTON (RESTORED)
+    // LEAVE BUTTON
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
         leaveBtn.onclick = async () => {
             if (confirm(`Leave #${name}?`)) {
                 await updateDoc(doc(db, "conversations", id), { members: arrayRemove(currentUser.id) });
-                activeChatId = null;
-                document.getElementById('messages-box').innerHTML = "";
-                document.getElementById('chat-title').innerText = "Select a channel";
-                loadChannels();
+                closeCurrentChat();
             }
         };
     }
@@ -130,11 +120,20 @@ function openChat(id, name) {
         }
     };
 
-    // --- MEMBER LISTENER ---
+    // --- MEMBER LISTENER (WITH AUTOMATIC KICK) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
-        const listDiv = document.getElementById('member-list');
         const data = docSnap.data();
-        if (!data || !listDiv) return;
+        if (!data) return;
+
+        // SECURITY CHECK: If I am no longer in the members list, kick me out of the chat
+        if (!data.members.includes(currentUser.id)) {
+            closeCurrentChat();
+            return;
+        }
+
+        const listDiv = document.getElementById('member-list');
+        if (!listDiv) return;
+
         const fragment = document.createDocumentFragment();
         const uniqueIds = [...new Set(data.members)];
         for (let uid of uniqueIds) {
@@ -173,13 +172,23 @@ function openChat(id, name) {
     });
 }
 
+function closeCurrentChat() {
+    if (msgUnsub) msgUnsub();
+    if (memberUnsub) memberUnsub();
+    activeChatId = null;
+    document.getElementById('messages-box').innerHTML = "";
+    document.getElementById('chat-title').innerText = "Select a channel";
+    document.getElementById('sidebar-right').innerHTML = "";
+    document.getElementById('input-area').style.display = 'none';
+    loadChannels();
+}
+
 // --- SEND ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
     
-    // Pre-mark our own message as read so the sidebar doesn't flash red
     lastReadMap[activeChatId] = Date.now() + 2000;
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
@@ -190,7 +199,7 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH & CHANNEL CREATION ---
+// --- AUTH ---
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim();
     const p = document.getElementById('login-pass').value;
