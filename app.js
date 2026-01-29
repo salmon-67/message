@@ -41,15 +41,12 @@ onAuthStateChanged(auth, async (user) => {
 // --- SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
-    
-    // Server-side filter: Only get chats where I am a member
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
     channelUnsub = onSnapshot(q, (snap) => {
         const list = document.getElementById('channel-list');
         const docs = [];
         snap.forEach(d => docs.push({id: d.id, ...d.data()}));
-        
         docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
 
         list.innerHTML = ""; 
@@ -66,7 +63,7 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT (WITH SECURITY CHECK) ---
+// --- OPEN CHAT ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -92,6 +89,7 @@ function openChat(id, name) {
         };
     }
 
+    // RESET SIDEBAR RIGHT UI
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -99,34 +97,51 @@ function openChat(id, name) {
         <div id="static-add-ui" style="padding:15px; border-top:var(--border);">
             <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-bottom:5px;">
             <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
+            <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
         </div>
     `;
 
     if(name === 'announcements') document.getElementById('static-add-ui').style.display = 'none';
 
     document.getElementById('btn-add-member').onclick = async () => {
-        const val = document.getElementById('target-name').value.trim();
+        const input = document.getElementById('target-name');
+        const val = input.value.trim();
+        const errDiv = document.getElementById('add-err');
         if(!val) return;
+
         const qU = query(collection(db, "users"), where("username", "==", val), limit(1));
         const sU = await getDocs(qU);
+        
         if(!sU.empty) {
-            const newId = sU.docs[0].id;
-            const newName = sU.docs[0].data().username;
-            await updateDoc(doc(db, "conversations", id), { members: arrayUnion(newId), lastUpdated: serverTimestamp() });
-            await addDoc(collection(db, "conversations", id, "messages"), {
-                content: `${currentUser.username} added ${newName}`, senderId: "system", senderName: "System", timestamp: serverTimestamp()
+            const newUserData = sU.docs[0].data();
+            const newUserId = sU.docs[0].id;
+            
+            await updateDoc(doc(db, "conversations", id), { 
+                members: arrayUnion(newUserId), 
+                lastUpdated: serverTimestamp() 
             });
-            document.getElementById('target-name').value = "";
+            
+            await addDoc(collection(db, "conversations", id, "messages"), {
+                content: `${currentUser.username} added ${newUserData.username}`, 
+                senderId: "system", 
+                senderName: "System", 
+                timestamp: serverTimestamp()
+            });
+            
+            input.value = "";
+            errDiv.innerText = "";
+        } else {
+            errDiv.innerText = "User not found";
         }
     };
 
-    // --- MEMBER LISTENER (WITH AUTOMATIC KICK) ---
+    // --- MEMBER LISTENER ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const data = docSnap.data();
-        if (!data) return;
+        if (!data || !activeChatId) return;
 
-        // SECURITY CHECK: If I am no longer in the members list, kick me out of the chat
-        if (!data.members.includes(currentUser.id)) {
+        // Security check: only kick if we are sure the data is loaded and we aren't in it
+        if (data.members && !data.members.includes(currentUser.id)) {
             closeCurrentChat();
             return;
         }
@@ -136,6 +151,7 @@ function openChat(id, name) {
 
         const fragment = document.createDocumentFragment();
         const uniqueIds = [...new Set(data.members)];
+        
         for (let uid of uniqueIds) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
@@ -178,7 +194,8 @@ function closeCurrentChat() {
     activeChatId = null;
     document.getElementById('messages-box').innerHTML = "";
     document.getElementById('chat-title').innerText = "Select a channel";
-    document.getElementById('sidebar-right').innerHTML = "";
+    const sidebarRight = document.getElementById('sidebar-right');
+    if (sidebarRight) sidebarRight.innerHTML = "";
     document.getElementById('input-area').style.display = 'none';
     loadChannels();
 }
@@ -188,9 +205,6 @@ document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
-    
-    lastReadMap[activeChatId] = Date.now() + 2000;
-    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
     input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
