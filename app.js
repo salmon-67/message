@@ -38,7 +38,6 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
@@ -63,7 +62,6 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -77,7 +75,6 @@ function openChat(id, name) {
     
     loadChannels();
 
-    // LEAVE BUTTON
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements') ? 'none' : 'block';
@@ -89,7 +86,6 @@ function openChat(id, name) {
         };
     }
 
-    // RESET SIDEBAR RIGHT UI
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -105,7 +101,8 @@ function openChat(id, name) {
 
     document.getElementById('btn-add-member').onclick = async () => {
         const input = document.getElementById('target-name');
-        const val = input.value.trim();
+        // FIX: Convert input to lowercase for comparison
+        const val = input.value.trim().toLowerCase();
         const errDiv = document.getElementById('add-err');
         if(!val) return;
 
@@ -135,12 +132,10 @@ function openChat(id, name) {
         }
     };
 
-    // --- MEMBER LISTENER ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const data = docSnap.data();
         if (!data || !activeChatId) return;
 
-        // Security check: only kick if we are sure the data is loaded and we aren't in it
         if (data.members && !data.members.includes(currentUser.id)) {
             closeCurrentChat();
             return;
@@ -167,7 +162,6 @@ function openChat(id, name) {
         listDiv.appendChild(fragment);
     });
 
-    // --- MESSAGE LISTENER ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
@@ -200,12 +194,10 @@ function closeCurrentChat() {
     loadChannels();
 }
 
-// --- SEND ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
-    
     input.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, senderId: currentUser.id, senderName: currentUser.username, timestamp: serverTimestamp()
@@ -213,15 +205,16 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// --- AUTH ---
 document.getElementById('btn-signin').onclick = async () => {
-    const u = document.getElementById('login-user').value.trim();
+    // Sign-in usually needs to match the stored case
+    const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
     try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) {}
 };
 
 document.getElementById('btn-register').onclick = async () => {
-    const u = document.getElementById('login-user').value.trim();
+    // FIX: Force registration usernames to lowercase for easy searching
+    const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
