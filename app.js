@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove, where, limit, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove, where, limit, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
@@ -38,17 +38,14 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- HELPER: MAKE LINKS CLICKABLE ---
 function linkify(text) {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
-    return text.replace(urlRegex, (url) => {
-        return `<a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline;">${url}</a>`;
-    });
+    return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline;">${url}</a>`);
 }
 
 function loadChannels() {
     if (channelUnsub) channelUnsub();
-    const q = currentUser?.admin 
+    const q = (currentUser && currentUser.admin)
         ? query(collection(db, "conversations"))
         : query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
@@ -62,7 +59,6 @@ function loadChannels() {
         docs.forEach(data => {
             const isSelected = activeChatId === data.id;
             const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
-
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''} ${isUnread ? 'unread' : ''}`;
             btn.innerText = `# ${data.name}`;
@@ -79,7 +75,31 @@ function openChat(id, name) {
     activeChatId = id;
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-    document.getElementById('chat-title').innerText = `# ${name}`;
+    
+    // Header UI
+    const titleArea = document.getElementById('chat-title');
+    titleArea.innerHTML = `# ${name}`;
+    
+    // Add Clear Chat button for Admins
+    if (currentUser.admin) {
+        const clearBtn = document.createElement('button');
+        clearBtn.innerText = "Clear History";
+        clearBtn.style = "font-size: 10px; margin-left: 15px; padding: 2px 5px; color: red; border: 1px solid red; background: none; cursor: pointer;";
+        clearBtn.onclick = async () => {
+            if (confirm("Delete EVERY message in this channel? This cannot be undone.")) {
+                const msgs = await getDocs(collection(db, "conversations", id, "messages"));
+                const batch = writeBatch(db);
+                msgs.forEach(d => batch.delete(d.ref));
+                await batch.commit();
+                await addDoc(collection(db, "conversations", id, "messages"), {
+                    content: `Admin ${currentUser.username} cleared the chat history.`,
+                    senderId: "system", senderName: "System", timestamp: serverTimestamp()
+                });
+            }
+        };
+        titleArea.appendChild(clearBtn);
+    }
+
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
     loadChannels();
@@ -89,6 +109,11 @@ function openChat(id, name) {
         leaveBtn.style.display = (name === 'announcements' || currentUser.admin) ? 'none' : 'block';
         leaveBtn.onclick = async () => {
             if (confirm(`Leave #${name}?`)) {
+                // Post Leave Notification BEFORE removing member
+                await addDoc(collection(db, "conversations", id, "messages"), {
+                    content: `${currentUser.username} has left the group.`,
+                    senderId: "system", senderName: "System", timestamp: serverTimestamp()
+                });
                 await updateDoc(doc(db, "conversations", id), { members: arrayRemove(currentUser.id) });
                 closeCurrentChat();
             }
@@ -105,12 +130,29 @@ function openChat(id, name) {
         </div>
     `;
 
+    if(name === 'announcements' && !currentUser.admin) document.getElementById('static-add-ui').style.display = 'none';
+
+    document.getElementById('btn-add-member').onclick = async () => {
+        const input = document.getElementById('target-name');
+        const val = input.value.trim().toLowerCase();
+        if(!val) return;
+        const qU = query(collection(db, "users"), where("username", "==", val), limit(1));
+        const sU = await getDocs(qU);
+        if(!sU.empty) {
+            const foundUserId = sU.docs[0].id;
+            await updateDoc(doc(db, "conversations", id), { members: arrayUnion(foundUserId), lastUpdated: serverTimestamp() });
+            await addDoc(collection(db, "conversations", id, "messages"), {
+                content: `${currentUser.username} added ${val}`, senderId: "system", senderName: "System", timestamp: serverTimestamp()
+            });
+            input.value = "";
+        }
+    };
+
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const data = docSnap.data();
         if (!data || !activeChatId) return;
         if (!currentUser.admin && data.members && !data.members.includes(currentUser.id)) {
-            closeCurrentChat();
-            return;
+            closeCurrentChat(); return;
         }
         const listDiv = document.getElementById('member-list');
         const fragment = document.createDocumentFragment();
@@ -129,35 +171,28 @@ function openChat(id, name) {
         if(listDiv) { listDiv.innerHTML = ""; listDiv.appendChild(fragment); }
     });
 
-    // --- MESSAGE LISTENER (UPDATED WITH LINKS) ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
         snap.forEach(d => {
             const m = d.data();
-            const mId = d.id;
             const div = document.createElement('div'); 
-            
             if(m.senderId === "system") {
                 div.style = "text-align:center; font-size:11px; color:#71717a; margin: 10px 0;";
                 div.innerHTML = `<i>${m.content}</i>`;
             } else {
                 div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
                 const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
-                const delBtnHtml = currentUser.admin ? `<span class="del-msg" style="cursor:pointer; color:red; margin-left:8px; font-weight:bold;">&times;</span>` : "";
-                
-                // Process content for links
-                const safeContent = linkify(m.content);
-
-                div.innerHTML = `
-                    <div class="msg-meta">${m.senderName} • ${t} ${delBtnHtml}</div>
-                    <div class="bubble">${safeContent}</div>
-                `;
-
+                const delBtn = currentUser.admin ? `<span class="del-msg" style="cursor:pointer; color:red; margin-left:8px;">&times;</span>` : "";
+                div.innerHTML = `<div class="msg-meta">${m.senderName} • ${t} ${delBtn}</div><div class="bubble">${linkify(m.content)}</div>`;
                 if(currentUser.admin) {
                     div.querySelector('.del-msg').onclick = async () => {
-                        if(confirm("Delete this message?")) {
-                            await deleteDoc(doc(db, "conversations", id, "messages", mId));
+                        if(confirm("Delete message?")) {
+                            await deleteDoc(doc(db, "conversations", id, "messages", d.id));
+                            await addDoc(collection(db, "conversations", id, "messages"), {
+                                content: `Admin deleted a message from ${m.senderName}`,
+                                senderId: "system", senderName: "System", timestamp: serverTimestamp()
+                            });
                         }
                     };
                 }
@@ -169,8 +204,7 @@ function openChat(id, name) {
 }
 
 function closeCurrentChat() {
-    if (msgUnsub) msgUnsub();
-    if (memberUnsub) memberUnsub();
+    if (msgUnsub) msgUnsub(); if (memberUnsub) memberUnsub();
     activeChatId = null;
     document.getElementById('messages-box').innerHTML = "";
     document.getElementById('chat-title').innerText = "Select a channel";
@@ -199,7 +233,7 @@ document.getElementById('btn-register').onclick = async () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
     const validUser = /^[a-zA-Z0-9]+$/.test(u);
-    if (!validUser || u.length < 3) { alert("Invalid username. Use 3+ letters/numbers only."); return; }
+    if (!validUser || u.length < 3) { alert("Alpha-numeric only (3+)"); return; }
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
         await setDoc(doc(db, "users", res.user.uid), { username: u, admin: false, lastSeen: serverTimestamp() });
