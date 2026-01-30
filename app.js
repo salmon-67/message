@@ -33,6 +33,7 @@ onAuthStateChanged(auth, async (user) => {
         await autoJoinAnnouncements();
         loadChannels();
     } else {
+        currentUser = null;
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
     }
@@ -45,7 +46,9 @@ function linkify(text) {
 
 function loadChannels() {
     if (channelUnsub) channelUnsub();
-    const q = (currentUser && currentUser.admin)
+    if (!currentUser) return;
+
+    const q = currentUser.admin
         ? query(collection(db, "conversations"))
         : query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
     
@@ -76,17 +79,15 @@ function openChat(id, name) {
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     
-    // Header UI
     const titleArea = document.getElementById('chat-title');
     titleArea.innerHTML = `# ${name}`;
     
-    // Add Clear Chat button for Admins
     if (currentUser.admin) {
         const clearBtn = document.createElement('button');
         clearBtn.innerText = "Clear History";
-        clearBtn.style = "font-size: 10px; margin-left: 15px; padding: 2px 5px; color: red; border: 1px solid red; background: none; cursor: pointer;";
+        clearBtn.style = "font-size: 10px; margin-left: 15px; padding: 2px 5px; color: red; border: 1px solid red; background: none; cursor: pointer; border-radius: 4px;";
         clearBtn.onclick = async () => {
-            if (confirm("Delete EVERY message in this channel? This cannot be undone.")) {
+            if (confirm("Delete EVERY message in this channel?")) {
                 const msgs = await getDocs(collection(db, "conversations", id, "messages"));
                 const batch = writeBatch(db);
                 msgs.forEach(d => batch.delete(d.ref));
@@ -102,14 +103,11 @@ function openChat(id, name) {
 
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    loadChannels();
-
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
         leaveBtn.style.display = (name === 'announcements' || currentUser.admin) ? 'none' : 'block';
         leaveBtn.onclick = async () => {
             if (confirm(`Leave #${name}?`)) {
-                // Post Leave Notification BEFORE removing member
                 await addDoc(collection(db, "conversations", id, "messages"), {
                     content: `${currentUser.username} has left the group.`,
                     senderId: "system", senderName: "System", timestamp: serverTimestamp()
@@ -126,7 +124,8 @@ function openChat(id, name) {
         <div id="member-list" class="scroll-area"></div>
         <div id="static-add-ui" style="padding:15px; border-top:var(--border);">
             <input type="text" id="target-name" class="input-box" placeholder="Username" style="font-size:11px; margin-bottom:5px;">
-            <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px;">Add Member</button>
+            <button id="btn-add-member" class="btn btn-primary" style="font-size:11px; padding:6px; width: 100%;">Add Member</button>
+            <div id="add-err" style="color:red; font-size:10px; margin-top:5px;"></div>
         </div>
     `;
 
@@ -135,9 +134,13 @@ function openChat(id, name) {
     document.getElementById('btn-add-member').onclick = async () => {
         const input = document.getElementById('target-name');
         const val = input.value.trim().toLowerCase();
+        const errDiv = document.getElementById('add-err');
         if(!val) return;
+        errDiv.innerText = "";
+
         const qU = query(collection(db, "users"), where("username", "==", val), limit(1));
         const sU = await getDocs(qU);
+        
         if(!sU.empty) {
             const foundUserId = sU.docs[0].id;
             await updateDoc(doc(db, "conversations", id), { members: arrayUnion(foundUserId), lastUpdated: serverTimestamp() });
@@ -145,18 +148,28 @@ function openChat(id, name) {
                 content: `${currentUser.username} added ${val}`, senderId: "system", senderName: "System", timestamp: serverTimestamp()
             });
             input.value = "";
+        } else {
+            errDiv.innerText = "User not found";
         }
     };
 
+    // --- IMPROVED MEMBER LISTENER ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const data = docSnap.data();
-        if (!data || !activeChatId) return;
+        if (!data || !activeChatId || !currentUser) return;
+
+        // KICK LOGIC: Only kick if we have data AND the user isn't an admin AND they aren't in the list
         if (!currentUser.admin && data.members && !data.members.includes(currentUser.id)) {
-            closeCurrentChat(); return;
+            closeCurrentChat();
+            return;
         }
+
         const listDiv = document.getElementById('member-list');
+        if (!listDiv) return;
+
         const fragment = document.createDocumentFragment();
         const uniqueIds = [...new Set(data.members || [])];
+        
         for (let uid of uniqueIds) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
@@ -168,7 +181,8 @@ function openChat(id, name) {
                 fragment.appendChild(d);
             }
         }
-        if(listDiv) { listDiv.innerHTML = ""; listDiv.appendChild(fragment); }
+        listDiv.innerHTML = ""; 
+        listDiv.appendChild(fragment);
     });
 
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
@@ -204,11 +218,14 @@ function openChat(id, name) {
 }
 
 function closeCurrentChat() {
-    if (msgUnsub) msgUnsub(); if (memberUnsub) memberUnsub();
+    if (msgUnsub) msgUnsub(); 
+    if (memberUnsub) memberUnsub();
     activeChatId = null;
     document.getElementById('messages-box').innerHTML = "";
     document.getElementById('chat-title').innerText = "Select a channel";
     document.getElementById('input-area').style.display = 'none';
+    const sidebarRight = document.getElementById('sidebar-right');
+    if (sidebarRight) sidebarRight.innerHTML = "";
     loadChannels();
 }
 
@@ -226,7 +243,7 @@ document.getElementById('btn-send').onclick = async () => {
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
-    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) {}
+    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { alert("Login failed"); }
 };
 
 document.getElementById('btn-register').onclick = async () => {
