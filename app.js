@@ -18,24 +18,30 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null;
-// Store last read timestamps in local storage to track unread messages
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- AUTH STATE LISTENER ---
+// --- HELPER: GET BADGES STRING ---
+function getBadges(user) {
+    let badges = "";
+    if (user.admin) badges += " 🛠️";
+    if (user.salmon) badges += " 🐟";
+    if (user.verified) badges += " 😎";
+    return badges;
+}
+
+// --- AUTH LISTENER ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
-        // Load user data from Firestore
         const userSnap = await getDoc(doc(db, "users", user.uid));
         if (!userSnap.exists()) { signOut(auth); return; }
         
         currentUser = { id: user.uid, ...userSnap.data() };
         
-        // Update UI for logged in state
-        document.getElementById('my-name').innerText = currentUser.username;
+        // Show badges next to my own name in the bottom left
+        document.getElementById('my-name').innerText = `${currentUser.username} ${getBadges(currentUser)}`;
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
         
-        // Heartbeat: Update "lastSeen" every 30 seconds
         setInterval(() => updateDoc(doc(db, "users", currentUser.id), { lastSeen: serverTimestamp() }), 30000);
         
         await autoJoinAnnouncements();
@@ -47,18 +53,16 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- HELPER: Turn URLs into Clickable Links ---
 function linkify(text) {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     return text.replace(urlRegex, (url) => `<a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline;">${url}</a>`);
 }
 
-// --- LOAD CHANNELS (LEFT SIDEBAR) ---
+// --- SIDEBAR (CHANNELS) ---
 function loadChannels() {
     if (channelUnsub) channelUnsub();
     if (!currentUser) return;
 
-    // Admins see all channels; Users see only channels they are members of
     const q = currentUser.admin
         ? query(collection(db, "conversations"))
         : query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
@@ -67,20 +71,15 @@ function loadChannels() {
         const list = document.getElementById('channel-list');
         const docs = [];
         snap.forEach(d => docs.push({id: d.id, ...d.data()}));
-        
-        // Sort by most recently updated
         docs.sort((a, b) => (b.lastUpdated?.toMillis() || 0) - (a.lastUpdated?.toMillis() || 0));
 
         list.innerHTML = ""; 
         docs.forEach(data => {
             const isSelected = activeChatId === data.id;
-            // Check if there is a new message since we last clicked this chat
             const isUnread = !isSelected && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
 
             const btn = document.createElement('div');
             btn.className = `channel-btn ${isSelected ? 'active' : ''}`;
-            
-            // Add red dot for unread
             const dot = isUnread ? `<span style="display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-right:8px; box-shadow:0 0 5px #ef4444;"></span>` : "";
             
             btn.innerHTML = `${dot}# ${data.name}`;
@@ -90,38 +89,32 @@ function loadChannels() {
     });
 }
 
-// --- OPEN CHAT (MAIN LOGIC) ---
+// --- MAIN CHAT ---
 function openChat(id, name) {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
     
     activeChatId = id;
-    
-    // Mark this channel as read
     lastReadMap[id] = Date.now();
     localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
-    loadChannels(); // Refresh sidebar to clear the red dot
+    loadChannels();
 
-    // 1. Setup Header & Admin Controls
     const titleArea = document.getElementById('chat-title');
     titleArea.innerHTML = `<span style="font-weight:bold;"># ${name}</span> <span id="member-count" style="font-size:12px; color:#71717a; margin-left:10px;"></span>`;
     
-    // "Clear History" button (Admin Only)
     if (currentUser.admin) {
         const clearBtn = document.createElement('button');
         clearBtn.innerText = "Clear Chat";
         clearBtn.style = "font-size: 10px; margin-left: 15px; padding: 2px 8px; color: #ef4444; border: 1px solid #ef4444; background: transparent; cursor: pointer; border-radius: 4px;";
-        
         clearBtn.onclick = async () => {
-            if (confirm("WARNING: This will delete ALL messages in this channel for EVERYONE.")) {
+            if (confirm("WARNING: Delete ALL messages?")) {
                 const msgs = await getDocs(collection(db, "conversations", id, "messages"));
                 const batch = writeBatch(db);
                 msgs.forEach(d => batch.delete(d.ref));
                 await batch.commit();
                 
-                // System notification
                 await addDoc(collection(db, "conversations", id, "messages"), {
-                    content: `⚠️ Admin ${currentUser.username} cleared the chat history.`,
+                    content: `⚠️ Admin ${currentUser.username} cleared chat history.`,
                     senderId: "system", senderName: "System", timestamp: serverTimestamp()
                 });
                 await updateDoc(doc(db, "conversations", id), { lastUpdated: serverTimestamp() });
@@ -130,23 +123,17 @@ function openChat(id, name) {
         titleArea.appendChild(clearBtn);
     }
 
-    // 2. Setup Input Area visibility
-    // Hide input if it's "announcements" and user is not admin
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
     
-    // 3. Setup "Leave Chat" Button
     const leaveBtn = document.getElementById('btn-leave-chat');
     if (leaveBtn) {
-        // Admins and Announcement channel viewers shouldn't leave via this button
         leaveBtn.style.display = (name === 'announcements' || currentUser.admin) ? 'none' : 'block';
         leaveBtn.onclick = async () => {
             if (confirm(`Leave #${name}?`)) {
-                // Post system message BEFORE leaving
                 await addDoc(collection(db, "conversations", id, "messages"), {
                     content: `👋 ${currentUser.username} left the group.`,
                     senderId: "system", senderName: "System", timestamp: serverTimestamp()
                 });
-                // Remove self from members array
                 await updateDoc(doc(db, "conversations", id), { 
                     members: arrayRemove(currentUser.id),
                     lastUpdated: serverTimestamp()
@@ -156,7 +143,6 @@ function openChat(id, name) {
         };
     }
 
-    // 4. Setup Right Sidebar (Member List & Add User)
     const sidebar = document.getElementById('sidebar-right');
     sidebar.innerHTML = `
         <div class="header">MEMBERS</div>
@@ -168,10 +154,8 @@ function openChat(id, name) {
         </div>
     `;
 
-    // Hide "Add Member" UI in announcements for non-admins
     if(name === 'announcements' && !currentUser.admin) document.getElementById('static-add-ui').style.display = 'none';
 
-    // --- ADD MEMBER LOGIC (FIXED) ---
     document.getElementById('btn-add-member').onclick = async () => {
         const input = document.getElementById('target-name');
         const rawVal = input.value.trim();
@@ -181,7 +165,6 @@ function openChat(id, name) {
         if(!rawVal) return;
         errDiv.innerText = "Searching...";
 
-        // Search for BOTH exact match and lowercase match to handle inconsistent data
         const qU = query(collection(db, "users"), where("username", "in", [rawVal, lowerVal]), limit(1));
         const sU = await getDocs(qU);
         
@@ -190,12 +173,10 @@ function openChat(id, name) {
             const foundUserId = foundUser.id;
             const foundUserName = foundUser.data().username;
             
-            // Add user to channel members
             await updateDoc(doc(db, "conversations", id), { 
                 members: arrayUnion(foundUserId), 
                 lastUpdated: serverTimestamp() 
             });
-            // Post system message
             await addDoc(collection(db, "conversations", id, "messages"), {
                 content: `👋 ${currentUser.username} added ${foundUserName}`, 
                 senderId: "system", senderName: "System", timestamp: serverTimestamp()
@@ -208,22 +189,19 @@ function openChat(id, name) {
         }
     };
 
-    // 5. Member Listener (Updates list, handles kicking)
+    // --- MEMBER LISTENER (WITH BADGES) ---
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (docSnap) => {
         const data = docSnap.data();
         if (!data || !activeChatId || !currentUser) return;
 
-        // Security Check: If I'm not an admin and I'm not in the member list -> Kick me out
         if (!currentUser.admin && data.members && !data.members.includes(currentUser.id)) {
             closeCurrentChat();
             return;
         }
 
-        // Update Member Count in Header
         const countSpan = document.getElementById('member-count');
         if(countSpan) countSpan.innerText = `(${data.members?.length || 0} members)`;
 
-        // Render Member List
         const listDiv = document.getElementById('member-list');
         const fragment = document.createDocumentFragment();
         const uniqueIds = [...new Set(data.members || [])];
@@ -232,9 +210,11 @@ function openChat(id, name) {
             const uSnap = await getDoc(doc(db, "users", uid));
             if (uSnap.exists()) {
                 const u = uSnap.data();
-                // Check if online (active in last 2 mins)
                 const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 120000);
                 
+                // Get Badges for Sidebar
+                const badgeString = getBadges(u);
+
                 const d = document.createElement('div');
                 d.className = "member-item";
                 d.style.display = "flex";
@@ -242,16 +222,14 @@ function openChat(id, name) {
                 d.style.alignItems = "center";
                 
                 const infoSpan = document.createElement('span');
-                infoSpan.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}</b>`;
+                infoSpan.innerHTML = `<div class="status-dot ${isOnline ? 'online' : ''}"></div><b>${u.username}${badgeString}</b>`;
                 d.appendChild(infoSpan);
 
-                // Admin Kick Button (Small Red X)
                 if (currentUser.admin && uid !== currentUser.id) {
                     const kickBtn = document.createElement('span');
                     kickBtn.innerHTML = "&times;";
                     kickBtn.title = "Remove User";
                     kickBtn.style = "color:#ef4444; cursor:pointer; font-weight:bold; font-size:16px; padding:0 5px;";
-                    
                     kickBtn.onclick = async () => {
                         if(confirm(`Remove ${u.username} from this group?`)) {
                             await updateDoc(doc(db, "conversations", id), { 
@@ -259,7 +237,7 @@ function openChat(id, name) {
                                 lastUpdated: serverTimestamp() 
                             });
                             await addDoc(collection(db, "conversations", id, "messages"), {
-                                content: `🚫 Admin removed ${u.username} from the group.`,
+                                content: `🚫 Admin removed ${u.username}.`,
                                 senderId: "system", senderName: "System", timestamp: serverTimestamp()
                             });
                         }
@@ -272,7 +250,7 @@ function openChat(id, name) {
         if(listDiv) { listDiv.innerHTML = ""; listDiv.appendChild(fragment); }
     });
 
-    // 6. Message Listener (Display, Delete, Linkify)
+    // --- MESSAGE LISTENER (WITH BADGES) ---
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); 
         box.innerHTML = ""; 
@@ -280,29 +258,34 @@ function openChat(id, name) {
             const m = d.data();
             const div = document.createElement('div'); 
             
-            // Render System Message
             if(m.senderId === "system") {
                 div.style = "text-align:center; font-size:11px; color:#71717a; margin: 15px 0; border-top: 1px solid #27272a; border-bottom: 1px solid #27272a; padding: 5px;";
                 div.innerHTML = `<i>${m.content}</i>`;
             } else {
-                // Render User Message
                 div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
                 const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
-                
-                // Delete Button (Admin Only)
                 const delBtn = currentUser.admin ? `<span class="del-msg" style="cursor:pointer; color:#ef4444; margin-left:8px; font-weight:bold;" title="Delete Message">&times;</span>` : "";
                 
+                // Get Badges from message data (for new messages) OR standard check
+                // Note: Messages sent BEFORE this update won't have the badge flags stored, so they might look plain.
+                let msgBadges = "";
+                if(m.senderBadges) {
+                     // If we stored badges string directly
+                    msgBadges = m.senderBadges;
+                } else if (m.senderFlags) {
+                    // If we stored flags
+                    msgBadges = getBadges(m.senderFlags);
+                }
+
                 div.innerHTML = `
-                    <div class="msg-meta">${m.senderName} • ${t} ${delBtn}</div>
+                    <div class="msg-meta">${m.senderName}${msgBadges} • ${t} ${delBtn}</div>
                     <div class="bubble">${linkify(m.content)}</div>
                 `;
                 
-                // Delete Logic
                 if(currentUser.admin) {
                     div.querySelector('.del-msg').onclick = async () => {
                         if(confirm("Delete this message?")) {
                             await deleteDoc(doc(db, "conversations", id, "messages", d.id));
-                            // System notification for transparency
                             await addDoc(collection(db, "conversations", id, "messages"), {
                                 content: `🗑️ Admin deleted a message from ${m.senderName}`,
                                 senderId: "system", senderName: "System", timestamp: serverTimestamp()
@@ -317,7 +300,6 @@ function openChat(id, name) {
     });
 }
 
-// --- CLOSE CHAT (CLEANUP) ---
 function closeCurrentChat() {
     if (msgUnsub) msgUnsub(); 
     if (memberUnsub) memberUnsub();
@@ -330,32 +312,35 @@ function closeCurrentChat() {
     loadChannels();
 }
 
-// --- GLOBAL EVENT LISTENERS ---
-
-// Send Message
+// --- SEND MESSAGE (SAVES BADGES) ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
     input.value = "";
+    
+    // We save the badge status AT THE TIME OF SENDING
+    // This allows badges to show up in the chat history correctly
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, 
         senderId: currentUser.id, 
         senderName: currentUser.username, 
+        senderFlags: {
+            admin: currentUser.admin || false,
+            salmon: currentUser.salmon || false,
+            verified: currentUser.verified || false
+        },
         timestamp: serverTimestamp()
     });
-    // Updating lastUpdated triggers the Red Dot for other users
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// Login
 document.getElementById('btn-signin').onclick = async () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
-    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { alert("Login failed (Check username/password)"); }
+    try { await signInWithEmailAndPassword(auth, `${u}@salmon.com`, p); } catch(e) { alert("Login failed"); }
 };
 
-// Register
 document.getElementById('btn-register').onclick = async () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
@@ -364,20 +349,24 @@ document.getElementById('btn-register').onclick = async () => {
     
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        await setDoc(doc(db, "users", res.user.uid), { username: u, admin: false, lastSeen: serverTimestamp() });
+        // Default new users: no admin, no salmon, no verified
+        await setDoc(doc(db, "users", res.user.uid), { 
+            username: u, 
+            admin: false, 
+            salmon: false, 
+            verified: false,
+            lastSeen: serverTimestamp() 
+        });
     } catch(e) { alert("Registration failed (Username might be taken)."); }
 };
 
-// Create Channel
 document.getElementById('btn-create').onclick = async () => {
     const n = document.getElementById('new-channel-name').value.trim();
     if (n) { await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.id], lastUpdated: serverTimestamp() }); }
 };
 
-// Logout
 document.getElementById('btn-logout').onclick = () => signOut(auth);
 
-// Auto-Join Announcements
 async function autoJoinAnnouncements() {
     const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
     const snap = await getDocs(q);
