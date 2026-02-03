@@ -51,6 +51,8 @@
         .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(12px); z-index: 2000; display: flex; align-items: center; justify-content: center; }
         .card { background: var(--bg-sidebar); border: var(--border); padding: 32px; border-radius: 24px; width: 90%; max-width: 400px; text-align: center; }
         input { width: 100%; padding: 12px; background: var(--bg-input); border: var(--border); color: white; border-radius: 10px; outline: none; margin-bottom: 10px; }
+        
+        #search-results .member-item:hover { background: rgba(255,255,255,0.05); cursor: pointer; }
     </style>
 </head>
 <body>
@@ -88,10 +90,10 @@
 
         <main id="main-chat">
             <header class="header">
-                <div id="chat-title" style="flex:1;"># Welcome</div>
-                <div id="chat-actions" style="display:none; gap:10px; display:flex;">
+                <div id="chat-title" style="flex:1;"># Select a chat</div>
+                <div id="chat-actions" style="display:none; gap:10px; align-items:center;">
                     <button id="header-add-user" class="btn" style="background:var(--bg-input); color:var(--accent);">+ Add User</button>
-                    <button id="btn-delete-channel" class="btn-danger" style="display:none;">Delete</button>
+                    <button id="btn-delete-channel" class="btn-danger">Delete</button>
                 </div>
             </header>
             <div id="messages-box" class="scroll-area"></div>
@@ -104,17 +106,17 @@
         </main>
 
         <aside id="sidebar-right">
-            <div class="section-label" style="padding-left:0;">Online In Room</div>
+            <div class="section-label" style="padding-left:0;">In this chat</div>
             <div id="member-list"></div>
         </aside>
     </div>
 
     <div id="search-modal" class="overlay" style="display:none;">
         <div class="card">
-            <h3 style="margin-top:0;">Search Users</h3>
-            <input type="text" id="search-user-input" placeholder="Username...">
-            <div id="search-results" style="text-align:left; max-height:200px; overflow-y:auto;"></div>
-            <button onclick="document.getElementById('search-modal').style.display='none'" class="btn" style="width:100%; background:var(--bg-input); color:white; margin-top:10px;">Cancel</button>
+            <h3 id="search-modal-title" style="margin-top:0;">Search Users</h3>
+            <input type="text" id="search-user-input" placeholder="Start typing username...">
+            <div id="search-results" style="text-align:left; max-height:250px; overflow-y:auto; margin-top:10px;"></div>
+            <button onclick="document.getElementById('search-modal').style.display='none'" class="btn" style="width:100%; background:var(--bg-input); color:white; margin-top:15px;">Cancel</button>
         </div>
     </div>
 
