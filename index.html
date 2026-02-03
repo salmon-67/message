@@ -17,6 +17,7 @@
             --border: 1px solid rgba(255,255,255,0.1);
             --danger: #ef4444; 
             --online: #22c55e;
+            --mention-bg: rgba(59, 130, 246, 0.2);
         }
 
         * { box-sizing: border-box; font-family: 'Inter', sans-serif; }
@@ -26,9 +27,11 @@
         .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); z-index: 2000; display: flex; align-items: center; justify-content: center; }
         .card { background: var(--bg-sidebar); border: var(--border); padding: 35px; border-radius: 20px; width: 90%; max-width: 380px; text-align: center; }
         
-        .input-box { width: 100%; padding: 12px; margin-bottom: 12px; background: var(--bg-input); border: 1px solid transparent; color: white; border-radius: 8px; outline: none; }
+        .input-box { width: 100%; padding: 12px; background: var(--bg-input); border: 1px solid transparent; color: white; border-radius: 8px; outline: none; transition: border 0.2s; }
+        .input-box:focus { border-color: var(--accent); }
         .btn { padding: 12px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; width: 100%; transition: 0.2s; }
         .btn-primary { background: var(--accent); color: white; }
+        .btn-primary:hover { opacity: 0.9; }
 
         /* LAYOUT */
         #app-layout { display: none; width: 100%; height: 100%; }
@@ -36,90 +39,87 @@
         #main-chat { flex: 1; background: var(--bg-chat); display: flex; flex-direction: column; }
         #sidebar-right { width: 240px; background: var(--bg-sidebar); border-left: var(--border); display: flex; flex-direction: column; }
 
+        /* HEADERS */
         .header { height: 60px; display: flex; align-items: center; padding: 0 16px; border-bottom: var(--border); font-weight: 700; justify-content: space-between; }
-        .scroll-area { flex: 1; overflow-y: auto; padding: 15px; }
+        .section-label { padding: 20px 16px 8px; font-size: 11px; font-weight: 800; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; display: flex; justify-content: space-between; align-items: center; }
+        .scroll-area { flex: 1; overflow-y: auto; padding: 10px; }
 
         /* MESSAGES */
-        .msg-row { display: flex; flex-direction: column; margin-bottom: 18px; }
+        .msg-row { display: flex; flex-direction: column; margin-bottom: 18px; padding: 0 15px; }
         .msg-row.me { align-items: flex-end; }
-        .msg-meta { font-size: 11px; opacity: 0.5; margin-bottom: 4px; }
-        .bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px; max-width: 85%; background: var(--bg-input); }
+        .msg-meta { font-size: 11px; opacity: 0.6; margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+        .bubble { padding: 10px 14px; border-radius: 14px; font-size: 14px; max-width: 85%; background: var(--bg-input); line-height: 1.4; word-wrap: break-word; }
         .msg-row.me .bubble { background: var(--accent); color: white; border-bottom-right-radius: 2px; }
+        .system-msg { text-align: center; color: var(--text-dim); font-size: 11px; margin: 15px 0; font-style: italic; }
+        .mention { background: var(--mention-bg); color: #60a5fa; padding: 0 4px; border-radius: 4px; font-weight: 600; }
+        .chat-link { color: #60a5fa; text-decoration: underline; }
 
-        /* CHANNEL BUTTONS - FIXED CSS */
+        /* CHANNEL BUTTONS */
         .channel-btn { 
-            padding: 10px 12px; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            color: var(--text-dim); 
-            margin-bottom: 4px; 
-            font-size: 14px; 
-            transition: background 0.2s, color 0.2s;
+            display: flex; align-items: center; padding: 8px 12px; border-radius: 6px; cursor: pointer; 
+            color: var(--text-dim); margin-bottom: 2px; font-size: 14px; transition: 0.2s;
         }
+        .channel-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-main); }
+        .channel-btn.active { background: var(--accent) !important; color: white !important; font-weight: 600; }
+        .unread-dot { width: 8px; height: 8px; background: var(--danger); border-radius: 50%; margin-right: 8px; flex-shrink: 0; }
 
-        /* Active selection: Always Blue */
-        .channel-btn.active { 
-            background: var(--accent) !important; 
-            color: white !important; 
-            font-weight: 600; 
-        }
-
-        /* Unread state: Bright Red */
-        .channel-btn.unread { 
-            color: var(--danger) !important; 
-            font-weight: 800; 
-        }
-        
-        .channel-btn.unread::after { 
-            content: " •"; 
-            margin-left: 5px;
-        }
-
-        /* MEMBERS */
-        .member-item { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 8px; font-size: 13px; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: gray; }
+        /* MEMBERS SIDEBAR */
+        .member-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; border-radius: 8px; font-size: 13px; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #3f3f46; margin-right: 10px; }
         .status-dot.online { background: var(--online); box-shadow: 0 0 8px var(--online); }
         
-        #admin-controls {
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid rgba(255,255,255,0.1);
-        }
+        .add-box { padding: 15px; border-top: var(--border); }
+        .msg-tools { cursor: pointer; opacity: 0; transition: 0.2s; font-size: 12px; }
+        .msg-row:hover .msg-tools { opacity: 1; }
+
     </style>
 </head>
 <body>
 
     <div id="login-overlay" class="overlay">
         <div class="card">
-            <h1 style="color:var(--accent);">Salmon</h1>
-            <input type="text" id="login-user" class="input-box" placeholder="Username">
-            <input type="password" id="login-pass" class="input-box" placeholder="Password">
+            <h1 style="color:var(--accent); margin-bottom: 25px; font-weight: 800;">SALMON</h1>
+            <input type="text" id="login-user" class="input-box" placeholder="Username" style="margin-bottom: 12px;">
+            <input type="password" id="login-pass" class="input-box" placeholder="Password" style="margin-bottom: 20px;">
             <button id="btn-signin" class="btn btn-primary">Sign In</button>
-            <button id="btn-register" style="background:none; border:none; color:var(--text-dim); margin-top:20px; cursor:pointer;">Create Account</button>
-            <div id="login-error" style="color:var(--danger); margin-top:15px; font-size:12px;"></div>
+            <button id="btn-register" style="background:none; border:none; color:var(--text-dim); margin-top:20px; cursor:pointer; font-size: 13px;">Create Account</button>
         </div>
     </div>
 
     <div id="app-layout">
         <nav id="sidebar-left">
-            <div class="header" style="color:var(--accent);">SALMON</div>
-            <div id="channel-list" class="scroll-area"></div>
-            <div style="padding: 15px; border-top: var(--border);">
-                <input id="new-channel-name" class="input-box" placeholder="New #channel">
-                <button id="btn-create" class="btn btn-primary">Create</button>
+            <div class="header" style="color:var(--accent); letter-spacing: 1px;">SALMON</div>
+            
+            <div class="scroll-area" style="padding: 5px;">
+                <div class="section-label">CHANNELS</div>
+                <div id="channel-list"></div>
+
+                <div class="section-label">
+                    DIRECT MESSAGES 
+                    <span id="btn-search-trigger" style="cursor:pointer; font-size: 16px; color: var(--accent);">+</span>
+                </div>
+                <div id="dm-list"></div>
             </div>
-            <div style="padding:15px; border-top: var(--border);">
-                <div id="my-name" style="font-weight: 600;"></div>
-                <button id="btn-logout" style="color:var(--danger); border:none; background:none; cursor:pointer; font-size:11px;">Logout</button>
+
+            <div style="padding: 15px; border-top: var(--border);">
+                <input id="new-channel-name" class="input-box" placeholder="New #channel" style="font-size: 12px; padding: 8px; margin-bottom: 8px;">
+                <button id="btn-create" class="btn btn-primary" style="padding: 8px; font-size: 12px;">Create Channel</button>
+            </div>
+
+            <div style="padding:15px; border-top: var(--border); background: rgba(0,0,0,0.2);">
+                <div id="my-name" style="font-weight: 600; font-size: 14px; margin-bottom: 4px;"></div>
+                <button id="btn-logout" style="color:var(--danger); border:none; background:none; cursor:pointer; font-size:11px; padding:0;">Logout</button>
             </div>
         </nav>
 
         <main id="main-chat">
             <header class="header">
                 <span id="chat-title"># Select Channel</span>
-                <button id="btn-leave-chat" style="display:none; color:var(--danger); background:none; border:1px solid var(--danger); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:11px;">Leave</button>
+                <button id="btn-leave-chat" style="display:none; color:var(--danger); background:none; border:1px solid var(--danger); border-radius:4px; padding:4px 8px; cursor:pointer; font-size:11px;">Leave Channel</button>
             </header>
+
             <div id="messages-box" class="scroll-area"></div>
+
             <div id="input-area" style="padding: 20px; display:none; border-top: var(--border);">
                 <div style="display:flex; gap:10px;">
                     <input type="text" id="msg-input" placeholder="Message..." class="input-box" style="margin:0;">
@@ -131,9 +131,28 @@
         <aside id="sidebar-right">
             <div class="header">MEMBERS</div>
             <div id="member-list" class="scroll-area"></div>
-            </aside>
+        </aside>
+    </div>
+
+    <div id="search-modal" class="overlay" style="display:none;">
+        <div class="card" style="max-width: 320px; padding: 25px;">
+            <h3 style="margin-top:0; font-size: 16px;">Start a Direct Message</h3>
+            <input type="text" id="search-user-input" class="input-box" placeholder="Type a username..." style="margin-bottom: 15px;">
+            <div id="search-results" style="max-height: 200px; overflow-y: auto; margin-bottom: 15px;"></div>
+            <button onclick="document.getElementById('search-modal').style.display='none'" class="btn" style="background: var(--bg-input); color: white;">Cancel</button>
+        </div>
     </div>
 
     <script type="module" src="app.js"></script>
+    <script>
+        // Simple UI toggle for the search modal
+        const searchTrigger = document.getElementById('btn-search-trigger');
+        if(searchTrigger) {
+            searchTrigger.onclick = () => {
+                document.getElementById('search-modal').style.display = 'flex';
+                document.getElementById('search-user-input').focus();
+            };
+        }
+    </script>
 </body>
 </html>
