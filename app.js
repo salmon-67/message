@@ -18,25 +18,23 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let activeChatName = "";
-let msgUnsub = null, sidebarUnsub = null;
+let msgUnsub = null, sidebarUnsub = null, memberListUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- RANK EMOJIS ---
+// --- RANK SYSTEM ---
 const getBadges = (u) => {
     let b = "";
-    if (u.dev) b += '<i class="badge" title="Developer">💻</i>';
-    if (u.admin) b += '<i class="badge" title="Admin">🛠️</i>';
-    if (u.salmon) b += '<i class="badge" title="Salmon Staff">🐟</i>';
-    if (u.verified) b += '<i class="badge" title="Verified">✅</i>';
-    if (u.vip) b += '<i class="badge" title="VIP">💎</i>';
+    if (u.dev) b += '<span class="badge" title="Developer">💻</span>';
+    if (u.admin) b += '<span class="badge" title="Admin">🛠️</span>';
+    if (u.salmon) b += '<span class="badge" title="Staff">🐟</span>';
+    if (u.verified) b += '<span class="badge" title="Verified">✅</span>';
     return b;
 };
 
-// --- AUTH & GLOBAL AUTO-JOIN ---
+// --- AUTH & DEVICE BAN ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         if (localStorage.getItem('salmon_status') === 'device_banned') { location.reload(); return; }
-        
         const snap = await getDoc(doc(db, "users", user.uid));
         currentUser = { id: user.uid, ...snap.data() };
 
@@ -45,71 +43,51 @@ onAuthStateChanged(auth, async (user) => {
             signOut(auth); return;
         }
 
-        // AUTO-JOIN GLOBAL CHAT
-        const globalQ = query(collection(db, "conversations"), where("name", "==", "everyone"), limit(1));
-        const gSnap = await getDocs(globalQ);
-        if (!gSnap.empty) {
-            await updateDoc(doc(db, "conversations", gSnap.docs[0].id), { members: arrayUnion(currentUser.id) });
-        }
-
         document.getElementById('my-name').innerHTML = `${currentUser.username}${getBadges(currentUser)}`;
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
         
         setInterval(() => updateDoc(doc(db, "users", currentUser.id), { lastSeen: serverTimestamp() }), 15000);
+        
         syncSidebar();
-        loadAllMembers(); // Show everyone in the list
+        loadAllMembers();
     } else {
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
     }
 });
 
-// --- LOAD ALL MEMBERS (FIXED) ---
+// --- LOAD MEMBERS (FIXED DUPLICATION) ---
 function loadAllMembers() {
-    onSnapshot(collection(db, "users"), (snap) => {
+    if (memberListUnsub) memberListUnsub(); // Clear old listener to prevent duplicates
+    memberListUnsub = onSnapshot(collection(db, "users"), (snap) => {
         const mList = document.getElementById('member-list');
-        mList.innerHTML = "";
+        mList.innerHTML = ""; // Hard clear
         snap.forEach(uDoc => {
             const u = uDoc.data();
             const isOnline = u.lastSeen && (Date.now() - u.lastSeen.toMillis() < 45000);
             const div = document.createElement('div');
             div.className = "member-item";
             div.innerHTML = `
-                <span><span class="status-dot ${isOnline?'online':''}"></span> ${u.username}${getBadges(u)}</span>
-                ${currentUser.admin && uDoc.id !== currentUser.id ? `<button onclick="banUser('${uDoc.id}', '${u.username}')" style="color:red; background:none; border:none; cursor:pointer; font-size:10px;">BAN</button>` : ''}
+                <span><span class="status-dot ${isOnline ? 'online' : ''}"></span>${u.username}${getBadges(u)}</span>
+                ${currentUser.admin && uDoc.id !== currentUser.id ? `<button onclick="banUser('${uDoc.id}', '${u.username}')" style="color:var(--danger); background:none; border:none; cursor:pointer; font-size:10px;">BAN</button>` : ''}
             `;
             mList.appendChild(div);
         });
     });
 }
 
-// --- MESSAGE EDITING ---
-window.editMsg = async (mid) => {
-    const newText = prompt("Edit message:");
-    if (newText && activeChatId) {
-        await updateDoc(doc(db, "conversations", activeChatId, "messages", mid), {
-            content: newText + " (edited)",
-            edited: true
-        });
-    }
-};
-
-// --- CHAT LOGIC ---
+// --- OPEN CHAT & NOTIFICATIONS ---
 async function openChat(id, name, isDM) {
     if (msgUnsub) msgUnsub();
     activeChatId = id; activeChatName = name.toLowerCase();
+    
+    lastReadMap[id] = Date.now();
+    localStorage.setItem('salmon_reads', JSON.stringify(lastReadMap));
     syncSidebar();
 
-    const isAdmin = currentUser.admin;
-    const isEveryone = name === "everyone";
-    
-    document.getElementById('chat-title').innerHTML = `
-        <span>${isEveryone ? '🌍' : (isDM ? '@' : '#')} ${name}</span>
-        ${isAdmin ? `<button onclick="clearChat('${id}')" style="margin-left:10px; color:red; background:none; border:1px solid red; border-radius:4px; font-size:10px; cursor:pointer;">Clear</button>` : ''}
-    `;
-
-    document.getElementById('input-area').style.display = (activeChatName === "announcements" && !isAdmin) ? 'none' : 'block';
+    document.getElementById('chat-title').innerHTML = `<span>${isDM ? '@' : '#'} ${name}</span> ${currentUser.admin ? `<button onclick="clearChat('${id}')" style="color:var(--danger); background:none; border:1px solid var(--danger); font-size:10px; padding:2px 5px; border-radius:4px; cursor:pointer; margin-left:10px;">Clear</button>` : ''}`;
+    document.getElementById('input-area').style.display = (activeChatName === "announcements" && !currentUser.admin) ? 'none' : 'block';
 
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box'); box.innerHTML = "";
@@ -120,11 +98,8 @@ async function openChat(id, name, isDM) {
                 div.className = "system-msg"; div.innerHTML = `<span>${m.content}</span>`;
             } else {
                 div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
-                const editBtn = isAdmin ? `<button onclick="editMsg('${d.id}')" style="background:none; border:none; color:gray; cursor:pointer; font-size:9px;">[Edit]</button>` : "";
-                div.innerHTML = `
-                    <div class="msg-meta">${m.senderName}${getBadges(m.senderFlags || {})} ${editBtn}</div>
-                    <div class="bubble">${m.content}</div>
-                `;
+                const edit = currentUser.admin ? `<span onclick="editMsg('${d.id}')" style="cursor:pointer; opacity:0.5; font-size:10px;"> [Edit]</span>` : "";
+                div.innerHTML = `<div class="msg-meta">${m.senderName}${getBadges(m.senderFlags || {})}${edit}</div><div class="bubble">${m.content}</div>`;
             }
             box.appendChild(div);
         });
@@ -132,49 +107,85 @@ async function openChat(id, name, isDM) {
     });
 }
 
-// --- ADMIN ACTIONS ---
-window.banUser = async (uid, name) => {
-    if (confirm(`Device Ban ${name}?`)) await updateDoc(doc(db, "users", uid), { banned: true });
-};
-
-window.clearChat = async (cid) => {
-    if (!confirm("Wipe all messages?")) return;
-    const snap = await getDocs(collection(db, "conversations", cid, "messages"));
-    const batch = writeBatch(db);
-    snap.forEach(d => batch.delete(d.ref));
-    await batch.commit();
-};
-
-// --- SIDEBAR & BUTTONS ---
+// --- SIDEBAR (FIXED ONLINE INDICATOR) ---
 function syncSidebar() {
-    onSnapshot(query(collection(db, "conversations"), where("members", "array-contains", currentUser.id)), async (snap) => {
+    if (sidebarUnsub) sidebarUnsub();
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
+    sidebarUnsub = onSnapshot(q, async (snap) => {
         const cDiv = document.getElementById('channel-list'), dDiv = document.getElementById('dm-list');
         cDiv.innerHTML = ""; dDiv.innerHTML = "";
+        
         for (const docSnap of snap.docs) {
-            const data = docSnap.data(), btn = document.createElement('div');
-            btn.className = `channel-btn ${activeChatId === docSnap.id ? 'active' : ''}`;
+            const data = docSnap.data(), id = docSnap.id;
+            const btn = document.createElement('div');
+            btn.className = `channel-btn ${activeChatId === id ? 'active' : ''}`;
+            
             if (data.type === 'dm') {
-                const other = data.members.find(u => u !== currentUser.id);
-                const u = (await getDoc(doc(db, "users", other))).data();
-                btn.innerHTML = `@ ${u?.username}`;
-                btn.onclick = () => openChat(docSnap.id, u?.username, true);
+                const otherId = data.members.find(uid => uid !== currentUser.id);
+                const u = (await getDoc(doc(db, "users", otherId))).data();
+                const isOnline = u?.lastSeen && (Date.now() - u.lastSeen.toMillis() < 45000);
+                btn.innerHTML = `<span class="dm-status ${isOnline ? 'online' : ''}"></span>${u?.username || 'User'}`;
+                btn.onclick = () => openChat(id, u?.username, true);
                 dDiv.appendChild(btn);
             } else {
-                btn.innerHTML = `${data.name==='everyone'?'🌍 ':'# '}${data.name}`;
-                btn.onclick = () => openChat(docSnap.id, data.name, false);
+                btn.innerHTML = `# ${data.name}`;
+                btn.onclick = () => openChat(id, data.name, false);
                 cDiv.appendChild(btn);
             }
         }
     });
 }
 
+// --- USER SEARCH & ADD TO CHAT (FIXED) ---
+document.getElementById('search-user-input').oninput = async (e) => {
+    const v = e.target.value.toLowerCase(), res = document.getElementById('search-results');
+    if (v.length < 2) { res.innerHTML = ""; return; }
+    const snap = await getDocs(query(collection(db, "users"), where("username_lower", ">=", v), where("username_lower", "<=", v + '\uf8ff'), limit(5)));
+    res.innerHTML = "";
+    snap.forEach(d => {
+        const u = d.data(); if (d.id === currentUser.id) return;
+        const div = document.createElement('div'); div.className = "member-item"; div.style.cursor = "pointer";
+        div.innerHTML = `<span><b>${u.username}</b>${getBadges(u)}</span>`;
+        div.onclick = async () => {
+            // Logic to create DM or add to current chat
+            const newDm = await addDoc(collection(db, "conversations"), {
+                type: 'dm',
+                members: [currentUser.id, d.id],
+                lastUpdated: serverTimestamp()
+            });
+            openChat(newDm.id, u.username, true);
+            document.getElementById('search-modal').style.display = 'none';
+        };
+        res.appendChild(div);
+    });
+};
+
+// --- ADMIN ACTIONS ---
+window.editMsg = async (mid) => {
+    const t = prompt("Edit message:");
+    if (t) await updateDoc(doc(db, "conversations", activeChatId, "messages", mid), { content: t + " (edited)" });
+};
+
+window.banUser = async (uid, name) => {
+    if (confirm(`Ban ${name}?`)) await updateDoc(doc(db, "users", uid), { banned: true });
+};
+
+window.clearChat = async (cid) => {
+    if (!confirm("Clear all?")) return;
+    const snap = await getDocs(collection(db, "conversations", cid, "messages"));
+    const batch = writeBatch(db);
+    snap.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+};
+
+// --- CORE EVENTS ---
 document.getElementById('btn-send').onclick = async () => {
     const inp = document.getElementById('msg-input'), txt = inp.value.trim();
     if (!txt || !activeChatId) return;
     inp.value = "";
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: txt, senderId: currentUser.id, senderName: currentUser.username,
-        senderFlags: { admin:!!currentUser.admin, dev:!!currentUser.dev, salmon:!!currentUser.salmon, verified:!!currentUser.verified },
+        senderFlags: { admin:!!currentUser.admin, salmon:!!currentUser.salmon, dev:!!currentUser.dev, verified:!!currentUser.verified },
         timestamp: serverTimestamp()
     });
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
@@ -186,7 +197,8 @@ document.getElementById('btn-register').onclick = () => {
     createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p).then(r => setDoc(doc(db, "users", r.user.uid), { username: u, username_lower: u, admin:false }));
 };
 document.getElementById('btn-create').onclick = async () => {
-    const n = document.getElementById('new-channel-name').value.trim().toLowerCase();
-    if (n) await addDoc(collection(db, "conversations"), { name: n, members: [currentUser.id], lastUpdated: serverTimestamp() });
+    const n = document.getElementById('new-channel-name').value.trim();
+    if (n) await addDoc(collection(db, "conversations"), { name: n, type: 'channel', members: [currentUser.id], lastUpdated: serverTimestamp() });
 };
 document.getElementById('btn-logout').onclick = () => signOut(auth);
+document.getElementById('open-dm-search').onclick = () => document.getElementById('search-modal').style.display = 'flex';
