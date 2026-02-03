@@ -20,7 +20,7 @@ let activeChatId = null;
 let msgUnsub = null, memberUnsub = null, channelUnsub = null, dmUnsub = null;
 let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 
-// --- FORMATTING HELPERS ---
+// --- 1. FORMATTING HELPERS ---
 function getBadges(user) {
     let b = "";
     if (user.dev) b += " 💻";
@@ -28,7 +28,7 @@ function getBadges(user) {
     if (user.mod) b += " 🛡️";
     if (user.salmon) b += " 🐟";
     if (user.vip) b += " 💎";
-    if (user.verified) b += " ✅";
+    if (user.verified) b += " ✅"; // Verified is now a tick
     return b;
 }
 
@@ -38,7 +38,7 @@ function formatMsg(text) {
     return f;
 }
 
-// --- AUTH LOGIC ---
+// --- 2. AUTHENTICATION ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const snap = await getDoc(doc(db, "users", user.uid));
@@ -46,7 +46,7 @@ onAuthStateChanged(auth, async (user) => {
         
         currentUser = { id: user.uid, ...snap.data() };
         
-        // Refinement: Fix missing searchable fields for old accounts
+        // Auto-fix for old users: ensure they have a searchable lowercase name
         if (!currentUser.username_lower) {
             await updateDoc(doc(db, "users", user.uid), { username_lower: currentUser.username.toLowerCase() });
         }
@@ -55,6 +55,7 @@ onAuthStateChanged(auth, async (user) => {
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
         
+        // Online Status Heartbeat
         setInterval(() => updateDoc(doc(db, "users", currentUser.id), { lastSeen: serverTimestamp() }), 20000);
         
         await autoJoinAnnouncements();
@@ -66,24 +67,21 @@ onAuthStateChanged(auth, async (user) => {
     }
 });
 
-// --- SIDEBAR LOGIC (THE CHANNEL FIX) ---
+// --- 3. SIDEBAR (CHANNELS & DMs) ---
 function syncSidebar() {
     if (channelUnsub) channelUnsub();
     if (dmUnsub) dmUnsub();
 
-    // FIXED: Show all conversations where type is NOT "dm" (includes null/undefined for old channels)
+    // Query everything that ISN'T a DM for the channel list
     const qChan = currentUser.admin 
         ? query(collection(db, "conversations"), where("type", "!=", "dm"))
         : query(collection(db, "conversations"), where("type", "!=", "dm"), where("members", "array-contains", currentUser.id));
 
-    channelUnsub = onSnapshot(qChan, (snap) => {
-        renderList(document.getElementById('channel-list'), snap, false);
-    });
+    channelUnsub = onSnapshot(qChan, (snap) => renderList(document.getElementById('channel-list'), snap, false));
 
+    // Query DMs
     const qDM = query(collection(db, "conversations"), where("type", "==", "dm"), where("members", "array-contains", currentUser.id));
-    dmUnsub = onSnapshot(qDM, (snap) => {
-        renderList(document.getElementById('dm-list'), snap, true);
-    });
+    dmUnsub = onSnapshot(qDM, (snap) => renderList(document.getElementById('dm-list'), snap, true));
 }
 
 function renderList(container, snap, isDM) {
@@ -97,20 +95,20 @@ function renderList(container, snap, isDM) {
         const active = activeChatId === data.id;
         const unread = !active && (data.lastUpdated?.toMillis() || 0) > (lastReadMap[data.id] || 0);
         
-        let name = data.name || "Unnamed Room";
+        let name = data.name || "General";
         if (isDM && data.memberNames) {
             name = data.memberNames.find(n => n !== currentUser.username) || "Private Chat";
         }
 
         const div = document.createElement('div');
-        div.className = `channel-btn ${active ? 'active' : ''}`;
+        div.className = `channel-btn ${active ? 'active' : ''} ${unread ? 'unread' : ''}`;
         div.innerHTML = `${unread ? '<span class="unread-dot"></span>' : ''}${isDM ? '@' : '#'} ${name}`;
         div.onclick = () => openChat(data.id, name, isDM);
         container.appendChild(div);
     });
 }
 
-// --- CHAT WINDOW ---
+// --- 4. CHAT WINDOW ---
 async function openChat(id, name, isDM) {
     if (msgUnsub) msgUnsub();
     if (memberUnsub) memberUnsub();
@@ -122,17 +120,13 @@ async function openChat(id, name, isDM) {
     document.getElementById('chat-title').innerHTML = `
         <div style="display:flex; flex-direction:column;">
             <span>${isDM ? '@' : '#'} ${name}</span>
-            <small id="typing-text" style="color:#3b82f6; font-size:10px; height:12px;"></small>
+            <small id="typing-text" style="color:#3b82f6; font-size:10px; height:12px; font-weight:normal;"></small>
         </div>
     `;
 
-    // Reset Input Area
     document.getElementById('input-area').style.display = (name === 'announcements' && !currentUser.admin) ? 'none' : 'block';
-    
-    // Right Sidebar
     setupMembers(id, isDM);
 
-    // Messages
     msgUnsub = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc")), (snap) => {
         const box = document.getElementById('messages-box');
         box.innerHTML = "";
@@ -149,7 +143,7 @@ async function openChat(id, name, isDM) {
                 
                 div.innerHTML = `
                     <div class="msg-meta">${m.senderName}${badges} ${tools}</div>
-                    <div class="bubble">${formatMsg(m.content)}${m.edited ? ' <small>(edited)</small>' : ''}</div>
+                    <div class="bubble">${formatMsg(m.content)}${m.edited ? ' <small style="opacity:0.5">(edited)</small>' : ''}</div>
                 `;
             }
             box.appendChild(div);
@@ -158,18 +152,53 @@ async function openChat(id, name, isDM) {
     });
 }
 
+// --- 5. SEARCH & DMs ---
+const searchInput = document.getElementById('search-user-input');
+const searchResults = document.getElementById('search-results');
+
+searchInput.oninput = async () => {
+    const val = searchInput.value.trim().toLowerCase();
+    if (val.length < 2) { searchResults.innerHTML = ""; return; }
+
+    const q = query(collection(db, "users"), where("username_lower", ">=", val), where("username_lower", "<=", val + '\uf8ff'), limit(5));
+    const snap = await getDocs(q);
+    searchResults.innerHTML = "";
+
+    snap.forEach(uDoc => {
+        if (uDoc.id === currentUser.id) return;
+        const uData = uDoc.data();
+        const div = document.createElement('div');
+        div.className = "member-item";
+        div.style.cursor = "pointer";
+        div.innerHTML = `<span><b>${uData.username}</b>${getBadges(uData)}</span>`;
+        div.onclick = () => startDM(uDoc.id, uData.username);
+        searchResults.appendChild(div);
+    });
+};
+
+async function startDM(targetId, targetName) {
+    const q = query(collection(db, "conversations"), where("type", "==", "dm"), where("members", "array-contains", currentUser.id));
+    const snap = await getDocs(q);
+    let existingId = null;
+    snap.forEach(d => { if (d.data().members.includes(targetId)) existingId = d.id; });
+
+    if (existingId) {
+        openChat(existingId, targetName, true);
+    } else {
+        const newDoc = await addDoc(collection(db, "conversations"), {
+            type: "dm", members: [currentUser.id, targetId], memberNames: [currentUser.username, targetName], lastUpdated: serverTimestamp()
+        });
+        openChat(newDoc.id, targetName, true);
+    }
+    document.getElementById('search-modal').style.display = 'none';
+}
+
+// --- 6. MEMBERS & TYPING ---
 function setupMembers(id, isDM) {
     const side = document.getElementById('sidebar-right');
     if (isDM) { side.innerHTML = "<div class='header'>PRIVATE DM</div>"; return; }
 
-    side.innerHTML = `
-        <div class="header">MEMBERS</div>
-        <div id="m-list" class="scroll-area"></div>
-        <div class="add-box">
-            <input type="text" id="add-inp" placeholder="Username...">
-            <button id="add-btn" class="btn btn-primary">Add</button>
-        </div>
-    `;
+    side.innerHTML = `<div class="header">MEMBERS</div><div id="m-list" class="scroll-area"></div><div class="add-box"><input type="text" id="add-inp" class="input-box" style="font-size:12px;" placeholder="Add user..."><button id="add-btn" class="btn btn-primary" style="padding:5px; margin-top:5px; font-size:12px;">Add</button></div>`;
 
     document.getElementById('add-btn').onclick = async () => {
         const val = document.getElementById('add-inp').value.trim();
@@ -183,12 +212,9 @@ function setupMembers(id, isDM) {
     };
 
     memberUnsub = onSnapshot(doc(db, "conversations", id), async (snap) => {
-        const data = snap.data();
-        if (!data) return;
-        const list = document.getElementById('m-list');
-        list.innerHTML = "";
+        const data = snap.data(); if (!data) return;
+        const list = document.getElementById('m-list'); list.innerHTML = "";
         
-        // Typing logic
         const typingDiv = document.getElementById('typing-text');
         const typers = data.typing || {};
         const activeTypers = Object.keys(typers).filter(uid => uid !== currentUser.id && (Date.now() - typers[uid].toMillis() < 3000));
@@ -202,45 +228,27 @@ function setupMembers(id, isDM) {
                 const item = document.createElement('div');
                 item.className = "member-item";
                 item.innerHTML = `<span><div class="status-dot ${online ? 'online' : ''}"></div>${ud.username}${getBadges(ud)}</span>`;
-                if (currentUser.admin && uid !== currentUser.id) {
-                    const kick = document.createElement('b'); kick.innerHTML = " &times;";
-                    kick.onclick = async () => { 
-                        await updateDoc(doc(db, "conversations", id), { members: arrayRemove(uid) });
-                        await sys(id, `🚫 Kicked ${ud.username}`);
-                    };
-                    item.appendChild(kick);
-                }
                 list.appendChild(item);
             }
         }
     });
 }
 
-// --- GLOBAL ACTIONS ---
-window.handleTool = async (chatId, msgId, ownerId) => {
-    const choice = prompt("Choose: (1) Delete, (2) Edit");
-    if (choice === "1" && currentUser.admin) {
-        await deleteDoc(doc(db, "conversations", chatId, "messages", msgId));
-    } else if (choice === "2" && ownerId === currentUser.id) {
-        const nt = prompt("New message:");
-        if (nt) await updateDoc(doc(db, "conversations", chatId, "messages", msgId), { content: nt, edited: true });
-    }
-};
-
+// --- 7. MESSAGE SEND & COMMANDS ---
 document.getElementById('btn-send').onclick = async () => {
     const inp = document.getElementById('msg-input');
     const txt = inp.value.trim();
     if (!txt || !activeChatId) return;
     inp.value = "";
 
-    if (txt.startsWith('/')) {
-        const p = txt.split(' ');
-        if (!currentUser.admin) return;
+    // Command Logic
+    if (txt.startsWith('/') && currentUser.admin) {
+        const p = txt.split(' '); // [/promote, username, role]
         const q = query(collection(db, "users"), where("username_lower", "==", p[1].toLowerCase()), limit(1));
         const s = await getDocs(q);
         if (!s.empty) {
             await updateDoc(doc(db, "users", s.docs[0].id), { [p[2]]: p[0] === '/promote' });
-            await sys(activeChatId, `🛠️ Role update for ${p[1]}`);
+            await sys(activeChatId, `🛠️ Admin ${p[0] === '/promote' ? 'granted' : 'revoked'} ${p[2]} for ${p[1]}`);
         }
         return;
     }
@@ -253,23 +261,22 @@ document.getElementById('btn-send').onclick = async () => {
     await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp(), [`typing.${currentUser.id}`]: null });
 };
 
-// Typing trigger
+// Tool Actions (Edit/Delete)
+window.handleTool = async (chatId, msgId, ownerId) => {
+    const choice = prompt("Choose: (1) Delete, (2) Edit");
+    if (choice === "1" && currentUser.admin) {
+        await deleteDoc(doc(db, "conversations", chatId, "messages", msgId));
+    } else if (choice === "2" && ownerId === currentUser.id) {
+        const nt = prompt("New message:");
+        if (nt) await updateDoc(doc(db, "conversations", chatId, "messages", msgId), { content: nt, edited: true });
+    }
+};
+
 document.getElementById('msg-input').oninput = () => {
     if (activeChatId) updateDoc(doc(db, "conversations", activeChatId), { [`typing.${currentUser.id}`]: serverTimestamp() });
 };
 
-async function sys(cid, t) {
-    await addDoc(collection(db, "conversations", cid, "messages"), { content: t, senderId: "system", timestamp: serverTimestamp() });
-    await updateDoc(doc(db, "conversations", cid), { lastUpdated: serverTimestamp() });
-}
-
-async function autoJoinAnnouncements() {
-    const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
-    const s = await getDocs(q);
-    if (!s.empty) await updateDoc(doc(db, "conversations", s.docs[0].id), { members: arrayUnion(currentUser.id) });
-}
-
-// User Actions
+// Auth & Setup Helpers
 document.getElementById('btn-signin').onclick = () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
@@ -284,4 +291,20 @@ document.getElementById('btn-register').onclick = () => {
     });
 };
 
+document.getElementById('btn-create').onclick = async () => {
+    const n = document.getElementById('new-channel-name').value.trim();
+    if (n) await addDoc(collection(db, "conversations"), { name: n, type: 'channel', members: [currentUser.id], lastUpdated: serverTimestamp() });
+};
+
 document.getElementById('btn-logout').onclick = () => signOut(auth);
+
+async function sys(cid, t) {
+    await addDoc(collection(db, "conversations", cid, "messages"), { content: t, senderId: "system", timestamp: serverTimestamp() });
+    await updateDoc(doc(db, "conversations", cid), { lastUpdated: serverTimestamp() });
+}
+
+async function autoJoinAnnouncements() {
+    const q = query(collection(db, "conversations"), where("name", "==", "announcements"), limit(1));
+    const s = await getDocs(q);
+    if (!s.empty) await updateDoc(doc(db, "conversations", s.docs[0].id), { members: arrayUnion(currentUser.id) });
+}
