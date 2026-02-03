@@ -23,9 +23,13 @@ let lastReadMap = JSON.parse(localStorage.getItem('salmon_reads') || '{}');
 // --- HELPER: GET BADGES STRING ---
 function getBadges(user) {
     let badges = "";
-    if (user.admin) badges += " 🛠️";
-    if (user.salmon) badges += " 🐟";
-    if (user.verified) badges += " 😎";
+    // Order determines which badge appears first
+    if (user.dev) badges += " 💻";      // Developer
+    if (user.admin) badges += " 🛠️";    // Admin
+    if (user.mod) badges += " 🛡️";      // Moderator
+    if (user.salmon) badges += " 🐟";   // Salmon
+    if (user.vip) badges += " 💎";      // VIP
+    if (user.verified) badges += " ✅"; // Verified Tick
     return badges;
 }
 
@@ -37,7 +41,7 @@ onAuthStateChanged(auth, async (user) => {
         
         currentUser = { id: user.uid, ...userSnap.data() };
         
-        // Show badges next to my own name in the bottom left
+        // Show badges next to my own name
         document.getElementById('my-name').innerText = `${currentUser.username} ${getBadges(currentUser)}`;
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
@@ -266,14 +270,10 @@ function openChat(id, name) {
                 const t = m.timestamp ? m.timestamp.toDate().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : "";
                 const delBtn = currentUser.admin ? `<span class="del-msg" style="cursor:pointer; color:#ef4444; margin-left:8px; font-weight:bold;" title="Delete Message">&times;</span>` : "";
                 
-                // Get Badges from message data (for new messages) OR standard check
-                // Note: Messages sent BEFORE this update won't have the badge flags stored, so they might look plain.
                 let msgBadges = "";
                 if(m.senderBadges) {
-                     // If we stored badges string directly
                     msgBadges = m.senderBadges;
                 } else if (m.senderFlags) {
-                    // If we stored flags
                     msgBadges = getBadges(m.senderFlags);
                 }
 
@@ -312,15 +312,14 @@ function closeCurrentChat() {
     loadChannels();
 }
 
-// --- SEND MESSAGE (SAVES BADGES) ---
+// --- SEND MESSAGE (SAVES ALL BADGES) ---
 document.getElementById('btn-send').onclick = async () => {
     const input = document.getElementById('msg-input');
     const text = input.value.trim();
     if (!text || !activeChatId) return;
     input.value = "";
     
-    // We save the badge status AT THE TIME OF SENDING
-    // This allows badges to show up in the chat history correctly
+    // Save all flags so badges appear permanently on the message
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: text, 
         senderId: currentUser.id, 
@@ -328,7 +327,10 @@ document.getElementById('btn-send').onclick = async () => {
         senderFlags: {
             admin: currentUser.admin || false,
             salmon: currentUser.salmon || false,
-            verified: currentUser.verified || false
+            verified: currentUser.verified || false,
+            mod: currentUser.mod || false,
+            vip: currentUser.vip || false,
+            dev: currentUser.dev || false
         },
         timestamp: serverTimestamp()
     });
@@ -349,12 +351,15 @@ document.getElementById('btn-register').onclick = async () => {
     
     try {
         const res = await createUserWithEmailAndPassword(auth, `${u}@salmon.com`, p);
-        // Default new users: no admin, no salmon, no verified
+        // Initialize new users with all flags false
         await setDoc(doc(db, "users", res.user.uid), { 
             username: u, 
             admin: false, 
             salmon: false, 
             verified: false,
+            mod: false,
+            vip: false,
+            dev: false,
             lastSeen: serverTimestamp() 
         });
     } catch(e) { alert("Registration failed (Username might be taken)."); }
