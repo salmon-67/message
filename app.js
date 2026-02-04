@@ -1,171 +1,104 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove, where, limit, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+// --- Safe message rendering, timestamps, Enter/Shift+Enter behavior ---
+// Helper: escape + create message node
+function renderMessage(container, d, userObj, isAdmin) {
+    const m = d.data();
+    const isMe = m.uid === userObj.id;
 
-const firebaseConfig = {
-    apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
-    authDomain: "message-salmon.firebaseapp.com",
-    projectId: "message-salmon",
-    storageBucket: "message-salmon.firebasestorage.app",
-    messagingSenderId: "538903396338",
-    appId: "1:538903396338:web:325543bb4a2a08863ff56b"
-};
+    const msgWrap = document.createElement('div');
+    msgWrap.className = `msg ${isMe ? 'me' : 'them'}`;
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
+    // Avatar (initials)
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = (m.name || 'U').split(' ').map(s => s[0]).join('').slice(0,2).toUpperCase();
+    msgWrap.appendChild(avatar);
 
-let userObj = null;
-let activeId = null;
-let isReg = false;
-let unsubMsg = null;
+    // Content block
+    const content = document.createElement('div');
+    content.className = 'msg-content';
 
-// --- AUTHENTICATION ---
-onAuthStateChanged(auth, async (u) => {
-    if (u) {
-        const snap = await getDoc(doc(db, "users", u.uid));
-        userObj = { id: u.uid, ...snap.data() };
-        document.getElementById('display-name').innerText = userObj.username;
-        document.getElementById('login-overlay').classList.add('hidden');
-        document.getElementById('app-layout').style.display = 'flex';
-        syncSidebar();
+    const header = document.createElement('div');
+    header.className = 'msg-header';
+
+    const nameEl = document.createElement('strong');
+    nameEl.textContent = m.name || 'Unknown';
+    header.appendChild(nameEl);
+
+    const timeEl = document.createElement('span');
+    timeEl.className = 'msg-time';
+    // Show relative time when available, fallback to formatted string
+    if (m.timestamp && m.timestamp.toMillis) {
+        const ts = m.timestamp.toDate();
+        timeEl.textContent = formatTime(ts);
     } else {
-        document.getElementById('login-overlay').classList.remove('hidden');
-        document.getElementById('app-layout').style.display = 'none';
+        timeEl.textContent = '';
     }
+    header.appendChild(timeEl);
+
+    content.appendChild(header);
+
+    const textEl = document.createElement('div');
+    textEl.className = 'msg-text';
+    // Use textContent to prevent XSS
+    textEl.textContent = m.text || '';
+    content.appendChild(textEl);
+
+    // Admin delete action
+    if (isAdmin) {
+        const del = document.createElement('button');
+        del.className = 'delete-btn';
+        del.textContent = 'Delete';
+        del.onclick = async () => {
+            if (!confirm('Delete this message?')) return;
+            await deleteDoc(doc(db, "conversations", d.ref.parent.parent.id, "messages", d.id));
+        };
+        content.appendChild(del);
+    }
+
+    msgWrap.appendChild(content);
+    container.appendChild(msgWrap);
+}
+
+// Format timestamp helper
+function formatTime(date) {
+    // return relative time for recent messages + time for day
+    const now = Date.now();
+    const diff = Math.floor((now - date.getTime()) / 1000);
+    if (diff < 60) return `${diff}s`;
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+    return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: 'numeric', month: 'short', day: 'numeric' }).format(date);
+}
+
+// Replace message render code inside your onSnapshot handler with:
+unsubMsg = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp")), (snap) => {
+    const box = document.getElementById('messages-box');
+    box.innerHTML = "";
+    snap.forEach(d => {
+        renderMessage(box, d, userObj, isAdmin);
+    });
+    box.scrollTop = box.scrollHeight;
 });
 
-// --- SIDEBAR ---
-function syncSidebar() {
-    const q = userObj.admin 
-        ? query(collection(db, "conversations"), orderBy("name"))
-        : query(collection(db, "conversations"), where("members", "array-contains", userObj.id));
-
-    onSnapshot(q, (snap) => {
-        const box = document.getElementById('channel-list');
-        box.innerHTML = "";
-        snap.forEach(d => {
-            const div = document.createElement('div');
-            div.className = `channel-btn ${activeId === d.id ? 'active' : ''}`;
-            div.innerText = "# " + d.data().name;
-            div.onclick = () => openChat(d.id, d.data().name);
-            box.appendChild(div);
+// Send handler: Enter to send, Shift+Enter newline
+const msgInput = document.getElementById('msg-input');
+msgInput.addEventListener('keydown', async (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const val = msgInput.value.trim();
+        if (!val) return;
+        await addDoc(collection(db, "conversations", activeId, "messages"), {
+            text: val, uid: userObj.id, name: userObj.username, timestamp: serverTimestamp()
         });
-    });
-}
-
-// --- CHAT SYSTEM & ANNOUNCEMENTS LOCK ---
-async function openChat(id, name) {
-    if (unsubMsg) unsubMsg();
-    activeId = id;
-    document.getElementById('chat-title').innerText = "# " + name;
-
-    const isAnn = name.toLowerCase().includes("announcements");
-    const isAdmin = userObj.admin === true;
-
-    // Permissions logic
-    document.getElementById('input-area').classList.toggle('hidden', isAnn && !isAdmin);
-    document.getElementById('chat-actions').classList.remove('hidden');
-    document.getElementById('open-search').classList.toggle('hidden', isAnn);
-    document.getElementById('btn-leave').classList.toggle('hidden', isAnn);
-
-    unsubMsg = onSnapshot(query(collection(db, "conversations", id, "messages"), orderBy("timestamp")), (snap) => {
-        const box = document.getElementById('messages-box');
-        box.innerHTML = "";
-        snap.forEach(d => {
-            const m = d.data();
-            const isMe = m.uid === userObj.id;
-            const div = document.createElement('div');
-            div.className = `msg ${isMe ? 'me' : 'them'}`;
-            div.innerHTML = `<div><strong>${m.name}:</strong> ${m.text}</div>`;
-            if (isAdmin) {
-                const del = document.createElement('span');
-                del.className = 'delete-btn'; del.innerText = ' [Delete]';
-                del.onclick = () => deleteDoc(doc(db, "conversations", id, "messages", d.id));
-                div.appendChild(del);
-            }
-            box.appendChild(div);
-        });
-        box.scrollTop = box.scrollHeight;
-    });
-}
-
-// --- ADD MEMBER SEARCH (FIXED) ---
-const searchInp = document.getElementById('search-input');
-const resBox = document.getElementById('results');
-
-searchInp.oninput = async (e) => {
-    const term = e.target.value.trim().toLowerCase();
-    resBox.innerHTML = "";
-    if (term.length < 2) return;
-
-    const q = query(collection(db, "users"), where("username_lower", ">=", term), where("username_lower", "<=", term + '\uf8ff'), limit(5));
-    const snap = await getDocs(q);
-
-    snap.forEach(uDoc => {
-        if (uDoc.id === userObj.id) return;
-        const u = uDoc.data();
-        const item = document.createElement('div');
-        item.className = 'result-item';
-        // Using data attributes for stability
-        item.innerHTML = `
-            <span>${u.username}</span>
-            <button class="btn btn-primary add-member-trigger" data-uid="${uDoc.id}">ADD</button>
-        `;
-        resBox.appendChild(item);
-    });
-};
-
-// Handle the "Add" button click via Event Delegation
-resBox.onclick = async (e) => {
-    if (e.target.classList.contains('add-member-trigger')) {
-        const targetUid = e.target.getAttribute('data-uid');
-        await updateDoc(doc(db, "conversations", activeId), { 
-            members: arrayUnion(targetUid) 
-        });
-        alert("User Added!");
-        document.getElementById('search-modal').classList.add('hidden');
+        msgInput.value = "";
     }
-};
-
-// --- GENERAL UI HANDLERS ---
+});
+// Keep old click send handler as backup
 document.getElementById('btn-send').onclick = async () => {
-    const inp = document.getElementById('msg-input');
-    if (!inp.value.trim()) return;
+    const val = msgInput.value.trim();
+    if (!val) return;
     await addDoc(collection(db, "conversations", activeId, "messages"), {
-        text: inp.value, uid: userObj.id, name: userObj.username, timestamp: serverTimestamp()
+        text: val, uid: userObj.id, name: userObj.username, timestamp: serverTimestamp()
     });
-    inp.value = "";
-};
-
-document.getElementById('btn-auth').onclick = async () => {
-    const u = document.getElementById('login-user').value.trim();
-    const p = document.getElementById('login-pass').value;
-    const email = `${u.toLowerCase()}@salmon.chat`;
-    if (isReg) {
-        const res = await createUserWithEmailAndPassword(auth, email, p);
-        await setDoc(doc(db, "users", res.user.uid), { username: u, username_lower: u.toLowerCase(), admin: false });
-    } else {
-        await signInWithEmailAndPassword(auth, email, p);
-    }
-};
-
-document.getElementById('open-search').onclick = () => document.getElementById('search-modal').classList.remove('hidden');
-document.getElementById('close-search').onclick = () => document.getElementById('search-modal').classList.add('hidden');
-document.getElementById('toggle-auth').onclick = () => {
-    isReg = !isReg;
-    document.getElementById('btn-auth').innerText = isReg ? "Register" : "Enter Chat";
-};
-
-document.getElementById('btn-create').onclick = async () => {
-    const n = document.getElementById('new-channel-name').value.trim();
-    if (!n) return;
-    await addDoc(collection(db, "conversations"), { name: n, members: [userObj.id] });
-    document.getElementById('new-channel-name').value = "";
-};
-
-document.getElementById('btn-logout').onclick = () => signOut(auth);
-document.getElementById('btn-leave').onclick = async () => {
-    await updateDoc(doc(db, "conversations", activeId), { members: arrayRemove(userObj.id) });
-    location.reload();
+    msgInput.value = "";
 };
