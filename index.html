@@ -1,61 +1,73 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Salmon Chat | Elite</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css"> </head>
+    <link rel="stylesheet" href="style.css">
+</head>
 <body>
 
-    <div id="login-overlay" class="overlay">
+    <!-- Login overlay -->
+    <div id="login-overlay" class="overlay" role="dialog" aria-modal="true" aria-label="Login">
         <div class="card">
             <h2 style="text-align:center; margin-bottom:20px;">Salmon Login</h2>
-            <input type="text" id="login-user" placeholder="Username" class="full-width">
-            <input type="password" id="login-pass" placeholder="Password" class="full-width">
-            <button id="btn-auth" class="btn btn-primary full-width">Enter Chat</button>
-            <p id="toggle-auth" class="toggle-link">Need to Register?</p>
+            <input type="text" id="login-user" placeholder="Username" class="full-width" aria-label="Username">
+            <input type="password" id="login-pass" placeholder="Password" class="full-width" aria-label="Password">
+            <button id="btn-auth" class="btn btn-primary full-width" aria-label="Authenticate">Enter Chat</button>
+            <p id="toggle-auth" class="toggle-link" style="cursor:pointer; margin-top:12px;">Need to Register?</p>
         </div>
     </div>
 
+    <!-- App layout -->
     <div id="app-layout" style="display:none;">
-        <nav id="sidebar-left">
+        <nav id="sidebar-left" aria-label="Channels and navigation">
             <div class="header"><h3>SALMON</h3></div>
-            <div id="channel-list" class="scroll-area"></div>
-            <div class="sidebar-footer">
-                <input id="new-channel-name" placeholder="Channel Name">
-                <button id="btn-create" class="btn btn-primary">+ Create</button>
+
+            <div id="channel-list" class="scroll-area" role="list"></div>
+
+            <div class="sidebar-footer" style="padding:12px;">
+                <input id="new-channel-name" placeholder="Channel Name" aria-label="New channel name">
+                <button id="btn-create" class="btn btn-primary" style="margin-top:8px;">+ Create</button>
             </div>
-            <div class="user-bar">
-                <span id="display-name"></span>
-                <span id="btn-logout">Logout</span>
+
+            <div class="user-bar" style="padding:12px; margin-top:auto;">
+                <span id="display-name" aria-live="polite"></span>
+                <span id="btn-logout" style="cursor:pointer; margin-left:12px;">Logout</span>
             </div>
         </nav>
 
-        <main id="main-chat">
-            <header class="header">
-                <div id="chat-title"># Select a Channel</div>
-                <div id="chat-actions" class="hidden">
-                    <button id="open-search" class="btn btn-primary">+ Add User</button>
-                    <button id="btn-leave" class="btn btn-danger">Leave</button>
+        <main id="main-chat" role="main" aria-live="polite">
+            <header class="header" role="banner">
+                <div id="chat-title" aria-live="polite"># Select a Channel</div>
+                <div id="chat-actions" class="hidden" role="toolbar" aria-hidden="true">
+                    <button id="open-search" class="btn btn-primary" aria-label="Add user to channel">+ Add User</button>
+                    <button id="btn-leave" class="btn btn-danger" aria-label="Leave channel">Leave</button>
                 </div>
             </header>
-            <div id="messages-box" class="scroll-area"></div>
-            <div id="input-area" class="hidden">
-                <div class="input-wrap">
-                    <input type="text" id="msg-input" placeholder="Message...">
-                    <button id="btn-send" class="btn btn-primary">Send</button>
+
+            <div id="messages-box" class="scroll-area" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+            <div id="input-area" class="hidden" aria-hidden="true">
+                <div class="input-wrap" style="padding:12px;">
+                    <textarea id="msg-input" placeholder="Message..." aria-label="Message input" rows="2"></textarea>
+                    <button id="btn-send" class="btn btn-primary" aria-label="Send message">Send</button>
+                </div>
+                <div style="padding: 0 12px 12px 12px; color:var(--text-dim); font-size:12px;">
+                    Press Enter to send — Shift+Enter for newline
                 </div>
             </div>
         </main>
     </div>
 
-    <div id="search-modal" class="overlay hidden">
+    <!-- Search modal -->
+    <div id="search-modal" class="overlay hidden" role="dialog" aria-modal="true" aria-label="Add member">
         <div class="card">
             <h3>Add Member</h3>
-            <input type="text" id="search-input" placeholder="Search username...">
-            <div id="results" class="search-results"></div>
-            <button id="close-search" class="btn-clear">Cancel</button>
+            <input type="text" id="search-input" placeholder="Search username..." aria-label="Search username">
+            <div id="results" class="search-results" role="list"></div>
+            <button id="close-search" class="btn-clear" style="margin-top:12px;">Cancel</button>
         </div>
     </div>
 
