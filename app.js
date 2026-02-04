@@ -22,7 +22,7 @@ let msgUnsub = null, sidebarUnsub = null, memberUnsub = null;
 
 const getBadge = (user) => user?.admin ? "🛠️ " : (user?.vip ? "✨ " : "");
 
-// --- AUTHENTICATION & AUTO-JOIN ---
+// --- AUTH & AUTO-JOIN ---
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         const snap = await getDoc(doc(db, "users", user.uid));
@@ -47,12 +47,10 @@ async function autoJoinAnnouncements() {
     if (!snap.empty) await updateDoc(doc(db, "conversations", snap.docs[0].id), { members: arrayUnion(currentUser.id) });
 }
 
-// --- SIDEBAR (Smooth Sync & Admin God Mode) ---
+// --- SIDEBAR (Admin Sees All) ---
 function syncSidebar() {
     if (sidebarUnsub) sidebarUnsub();
-    
-    // Admins see everything, Users see only their groups
-    const q = currentUser.admin 
+    const q = (currentUser && currentUser.admin) 
         ? query(collection(db, "conversations"), orderBy("name", "asc"))
         : query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
 
@@ -71,17 +69,16 @@ function syncSidebar() {
     });
 }
 
-// --- CHAT LOGIC & LOCKDOWN ---
+// --- CHAT LOGIC (Strict Announcements Lock) ---
 async function openChat(id, name) {
     if (msgUnsub) msgUnsub();
     activeChatId = id;
     document.getElementById('chat-title').innerText = "# " + name;
     
-    // Case-insensitive check to fix Announcements loophole
     const isAnn = name.toLowerCase() === "announcements";
     const isAdmin = currentUser.admin === true;
 
-    // Permissions: Hide input and actions in Announcements for non-admins
+    // Toggle Visibility
     document.getElementById('input-area').style.display = (isAnn && !isAdmin) ? 'none' : 'block';
     document.getElementById('btn-leave').classList.toggle('hidden', isAnn);
     document.getElementById('btn-trigger-add').classList.toggle('hidden', isAnn);
@@ -103,7 +100,6 @@ async function openChat(id, name) {
                 <div class="bubble">${m.content}</div>
                 ${isAdmin ? `<button class="delete-btn">🗑️</button>` : ""}
             `;
-            // Admin Moderation: Delete any message
             if (isAdmin) div.querySelector('.delete-btn').onclick = async () => await deleteDoc(doc(db, "conversations", id, "messages", d.id));
             box.appendChild(div);
         });
@@ -111,7 +107,7 @@ async function openChat(id, name) {
     });
 }
 
-// --- SEARCH & ADD USER ---
+// --- ADD MEMBER LOGIC ---
 document.getElementById('search-query').oninput = async (e) => {
     const val = e.target.value.trim().toLowerCase();
     const box = document.getElementById('search-results-box');
@@ -128,16 +124,15 @@ document.getElementById('search-query').oninput = async (e) => {
         div.className = "search-item";
         div.innerHTML = `<span>${u.username}</span><button class="btn btn-primary" style="padding:5px 10px; font-size:10px;">ADD</button>`;
         div.querySelector('button').onclick = async () => {
-            // Adds user to the members array of the active chat
             await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(uDoc.id) });
-            alert("User Added!");
+            alert(`Added ${u.username}!`);
             document.getElementById('search-modal').style.display = 'none';
         };
         box.appendChild(div);
     });
 };
 
-// --- GENERAL HANDLERS ---
+// --- CORE HANDLERS ---
 document.getElementById('btn-auth').onclick = async () => {
     const u = document.getElementById('login-user').value.trim().toLowerCase();
     const p = document.getElementById('login-pass').value;
@@ -149,6 +144,11 @@ document.getElementById('btn-auth').onclick = async () => {
             await signInWithEmailAndPassword(auth, `${u}@salmon.chat`, p);
         }
     } catch (e) { alert(e.message); }
+};
+
+document.getElementById('auth-toggle').onclick = () => {
+    isRegisterMode = !isRegisterMode;
+    document.getElementById('btn-auth').innerText = isRegisterMode ? "Register" : "Enter Chat";
 };
 
 document.getElementById('btn-send').onclick = async () => {
@@ -167,11 +167,16 @@ document.getElementById('btn-create-channel').onclick = async () => {
     document.getElementById('new-channel-input').value = "";
 };
 
-document.getElementById('btn-logout').onclick = async () => { await updateDoc(doc(db, "users", currentUser.id), { online: false }); signOut(auth); };
-document.getElementById('btn-trigger-add').onclick = () => { document.getElementById('search-modal').style.display = 'flex'; };
-document.getElementById('btn-leave').onclick = async () => { 
-    await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.id) }); 
-    location.reload(); 
+document.getElementById('btn-logout').onclick = async () => { 
+    if (currentUser) await updateDoc(doc(db, "users", currentUser.id), { online: false }); 
+    signOut(auth); 
+};
+
+document.getElementById('btn-trigger-add').onclick = () => document.getElementById('search-modal').style.display = 'flex';
+
+document.getElementById('btn-leave').onclick = async () => {
+    await updateDoc(doc(db, "conversations", activeChatId), { members: arrayRemove(currentUser.id) });
+    location.reload();
 };
 
 function syncMembers(chatId) {
@@ -184,7 +189,8 @@ function syncMembers(chatId) {
             if (uSnap.exists()) {
                 const u = uSnap.data();
                 const div = document.createElement('div');
-                div.innerHTML = `<p style="font-size:13px; margin:5px 0;"><span class="status-dot ${u.online ? 'online' : ''}"></span>${getBadge(u)}${u.username}</p>`;
+                div.innerHTML = `<p style="font-size:13px; margin:8px 0; display:flex; align-items:center;">
+                    <span class="status-dot ${u.online ? 'online' : ''}"></span>${getBadge(u)}${u.username}</p>`;
                 box.appendChild(div);
             }
         }
