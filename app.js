@@ -1,7 +1,8 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove, where, limit, getDocs, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, collection, addDoc, query, onSnapshot, orderBy, serverTimestamp, updateDoc, arrayUnion, arrayRemove, where, limit, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
+// --- CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyBt0V_lY3Y6rjRmw1kVu-xCj1UZTxiEYbU",
     authDomain: "message-salmon.firebaseapp.com",
@@ -15,374 +16,309 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// State Variables
+// --- STATE ---
 let currentUser = null;
 let activeChatId = null;
-let isAddingMode = "channel"; // 'channel' or 'dm'
 let isRegisterMode = false;
-let msgUnsub = null;
+let msgUnsub = null; // To stop listening when switching chats
+let memberUnsub = null; // To stop listening to member updates
 
 // --- AUTHENTICATION ---
-document.getElementById('btn-auth-toggle').onclick = () => {
-    isRegisterMode = !isRegisterMode;
-    document.getElementById('auth-status').innerText = isRegisterMode ? "Create a new account" : "Welcome back";
-    document.getElementById('btn-auth-main').innerText = isRegisterMode ? "Register" : "Sign In";
-    document.getElementById('btn-auth-toggle').innerText = isRegisterMode ? "Back to Login" : "Create an account";
-};
-
-document.getElementById('btn-auth-main').onclick = async () => {
-    const userInp = document.getElementById('login-user').value.trim().toLowerCase();
-    const passInp = document.getElementById('login-pass').value;
-
-    if (userInp.length < 3 || passInp.length < 6) {
-        return alert("Username must be 3+ chars, Password 6+ chars.");
-    }
-
-    const email = `${userInp}@salmon.chat`;
-
-    try {
-        if (isRegisterMode) {
-            const res = await createUserWithEmailAndPassword(auth, email, passInp);
-            // Create User Doc with username_lower for searching
-            await setDoc(doc(db, "users", res.user.uid), { 
-                username: userInp, 
-                username_lower: userInp, 
-                admin: false, 
-                vip: false,
-                online: true 
-            });
-        } else {
-            await signInWithEmailAndPassword(auth, email, passInp);
-        }
-    } catch (e) {
-        alert("Login Error: " + e.message);
-    }
-};
-
 onAuthStateChanged(auth, async (user) => {
     if (user) {
         // Fetch full profile
-        const userDoc = await getDoc(doc(db, "users", user.uid));
-        currentUser = { id: user.uid, ...userDoc.data() };
+        const userSnap = await getDoc(doc(db, "users", user.uid));
+        currentUser = { id: user.uid, ...userSnap.data() };
         
-        // Update online status
-        await updateDoc(doc(db, "users", user.uid), { online: true });
-
         // Update UI
-        let badge = currentUser.admin ? " 🛠️" : (currentUser.vip ? " ✨" : "");
-        document.getElementById('my-name').innerText = currentUser.username + badge;
-        document.getElementById('btn-admin-dash').style.display = currentUser.admin ? 'block' : 'none';
-        
+        document.getElementById('my-username').innerText = currentUser.username;
         document.getElementById('login-overlay').style.display = 'none';
         document.getElementById('app-layout').style.display = 'flex';
         
-        syncSidebar();
+        // Start Sidebar Listener
+        syncLeftSidebar();
     } else {
         document.getElementById('login-overlay').style.display = 'flex';
         document.getElementById('app-layout').style.display = 'none';
     }
 });
 
-document.getElementById('btn-logout').onclick = async () => {
-    if (currentUser) {
-        await updateDoc(doc(db, "users", currentUser.id), { online: false });
+document.getElementById('btn-login').onclick = async () => {
+    const u = document.getElementById('login-user').value.trim();
+    const p = document.getElementById('login-pass').value;
+    const email = `${u}@salmon.chat`; // Fake email generation
+
+    try {
+        if (isRegisterMode) {
+            const res = await createUserWithEmailAndPassword(auth, email, p);
+            // Save extra user details
+            await setDoc(doc(db, "users", res.user.uid), {
+                username: u,
+                username_lower: u.toLowerCase(), // Helper for search
+                admin: false,
+                online: true,
+                createdAt: serverTimestamp()
+            });
+        } else {
+            await signInWithEmailAndPassword(auth, email, p);
+        }
+    } catch (e) {
+        alert("Error: " + e.message);
     }
-    signOut(auth);
 };
 
-// --- SIDEBAR LOGIC ---
-function syncSidebar() {
-    // Show chats where user is a member
-    const q = currentUser.admin 
-        ? query(collection(db, "conversations"), orderBy("lastUpdated", "desc"))
-        : query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
+document.getElementById('btn-toggle-auth').onclick = () => {
+    isRegisterMode = !isRegisterMode;
+    document.getElementById('auth-status').innerText = isRegisterMode ? "Create Account" : "Login";
+    document.getElementById('btn-login').innerText = isRegisterMode ? "Register" : "Sign In";
+};
 
+document.getElementById('btn-logout').onclick = () => signOut(auth);
+
+// --- SIDEBAR (LEFT) ---
+function syncLeftSidebar() {
+    // Listen for conversations where I am a member
+    const q = query(collection(db, "conversations"), where("members", "array-contains", currentUser.id));
+    
     onSnapshot(q, (snap) => {
         const cList = document.getElementById('channel-list');
         const dList = document.getElementById('dm-list');
-        cList.innerHTML = ""; 
+        cList.innerHTML = "";
         dList.innerHTML = "";
-        
+
         snap.forEach(async (d) => {
             const data = d.data();
-            const id = d.id;
-            const btn = document.createElement('div');
+            const div = document.createElement('div');
             
-            // Highlight Logic
-            const isActive = activeChatId === id ? "active" : "";
-            btn.className = `channel-btn ${isActive}`;
+            // Highlight active
+            div.className = `channel-btn ${activeChatId === d.id ? 'active' : ''}`;
             
             if (data.type === 'dm') {
-                // Find the OTHER person's ID to display their name
-                const otherId = data.members.find(uid => uid !== currentUser.id) || data.members[0];
-                // We fetch the name asynchronously
-                const uSnap = await getDoc(doc(db, "users", otherId));
-                const uData = uSnap.data();
-                const onlineDot = uData?.online ? `<span class="status-dot online"></span>` : `<span class="status-dot"></span>`;
+                // For DM, find the OTHER person's ID to display their name
+                const otherId = data.members.find(uid => uid !== currentUser.id) || currentUser.id;
                 
-                btn.innerHTML = `<span>${onlineDot}${uData?.username || "Unknown"}</span>`;
-                btn.onclick = () => openChat(id, uData?.username || "DM", true);
-                dList.appendChild(btn);
+                // Fetch name (basic cache implementation)
+                let name = "Loading...";
+                const uSnap = await getDoc(doc(db, "users", otherId));
+                if(uSnap.exists()) name = uSnap.data().username;
+                
+                div.innerHTML = `<span style="color:#22c55e">●</span>&nbsp; ${name}`;
+                div.onclick = () => openChat(d.id, name, true);
+                dList.appendChild(div);
             } else {
-                btn.innerHTML = `<span># ${data.name}</span>`;
-                btn.onclick = () => openChat(id, data.name, false);
-                cList.appendChild(btn);
+                // Regular Channel
+                div.innerHTML = `# ${data.name}`;
+                div.onclick = () => openChat(d.id, data.name, false);
+                cList.appendChild(div);
             }
         });
     });
 }
 
 // --- CHAT LOGIC ---
-async function openChat(id, name, isDM) {
-    if (msgUnsub) msgUnsub();
-    activeChatId = id;
+async function openChat(chatId, chatName, isDM) {
+    if (msgUnsub) msgUnsub(); // Unsubscribe previous listener
     
-    // Refresh sidebar to apply blue highlight
-    syncSidebar();
-
-    document.getElementById('chat-title').innerText = (isDM ? "@ " : "# ") + name;
+    activeChatId = chatId;
+    
+    // UI Updates
+    document.getElementById('chat-header-title').innerText = isDM ? `@ ${chatName}` : `# ${chatName}`;
     document.getElementById('input-area').style.display = 'block';
     document.getElementById('chat-actions').style.display = 'flex';
+    document.getElementById('messages-box').innerHTML = ""; // Clear old msgs
     
-    // Header Buttons
-    const isAnnounce = name?.toLowerCase().includes("announcement");
-    document.getElementById('btn-delete-channel').style.display = currentUser.admin ? 'block' : 'none';
-    // Hide Leave/Add for DMs or Announcements
-    document.getElementById('btn-leave-room').style.display = (isDM || isAnnounce) ? 'none' : 'block';
-    document.getElementById('header-add-user').style.display = (isDM || isAnnounce) ? 'none' : 'block';
+    // Hide "Leave" button for DMs, show for Groups
+    document.getElementById('btn-leave').style.display = isDM ? 'none' : 'block';
+    document.getElementById('btn-add-user').style.display = isDM ? 'none' : 'block';
+    
+    // Admin Button
+    document.getElementById('btn-admin-nuke').style.display = currentUser.admin ? 'block' : 'none';
 
-    // Auto-Join if Shadow Mode (Admin) or just visiting
-    const roomRef = doc(db, "conversations", id);
-    const roomSnap = await getDoc(roomRef);
-    if (!roomSnap.data().members.includes(currentUser.id) && !currentUser.admin) {
-        await updateDoc(roomRef, { members: arrayUnion(currentUser.id) });
-    }
+    // 1. Load Members (Right Sidebar)
+    syncRightSidebar(chatId);
 
-    // Load Messages
-    const mq = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
-    msgUnsub = onSnapshot(mq, async (snap) => {
+    // 2. Load Messages
+    const q = query(collection(db, "conversations", chatId, "messages"), orderBy("timestamp", "asc"));
+    msgUnsub = onSnapshot(q, (snap) => {
         const box = document.getElementById('messages-box');
-        box.innerHTML = "";
-        
-        for (const d of snap.docs) {
+        box.innerHTML = ""; // Redrawing all for simplicity, can be optimized
+
+        snap.forEach(d => {
             const m = d.data();
             const div = document.createElement('div');
             
-            if (m.senderId === "system") {
-                div.style = "text-align:center; font-size:11px; color:gray; margin:10px 0;";
-                div.innerText = m.content;
-            } else {
-                // Fetch sender name
-                const sSnap = await getDoc(doc(db, "users", m.senderId));
-                const sData = sSnap.data();
-                const badge = sData?.admin ? "🛠️" : (sData?.vip ? "✨" : "");
-                
-                div.className = `msg-row ${m.senderId === currentUser.id ? 'me' : 'them'}`;
-                
-                // Add Delete button if Admin
-                const deleteBtn = currentUser.admin ? `<span style="color:red; cursor:pointer; margin-left:8px;" onclick="window.delMsg('${d.id}')">×</span>` : "";
+            // Format Timestamp
+            let timeStr = "";
+            if (m.timestamp) {
+                timeStr = m.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            }
 
+            if (m.senderId === 'system') {
+                div.className = "msg-row";
+                div.innerHTML = `<div class="system-msg">${m.content}</div>`;
+            } else {
+                const isMe = m.senderId === currentUser.id;
+                div.className = `msg-row ${isMe ? 'me' : 'them'}`;
+                
+                // Fetch sender name logic (omitted for brevity, assume stored or fetch)
+                // For now, we won't fetch name for every single message to save reads,
+                // but usually you'd store displayName in the message itself.
+                
                 div.innerHTML = `
-                    <div class="msg-meta">${badge} ${sData?.username || "User"}</div>
-                    <div class="bubble">${m.content} ${deleteBtn}</div>
+                    ${!isMe ? `<div class="msg-name">${m.senderName || 'User'}</div>` : ''}
+                    <div class="bubble">
+                        ${m.content}
+                        <span class="timestamp">${timeStr}</span>
+                    </div>
                 `;
             }
             box.appendChild(div);
-        }
-        box.scrollTop = box.scrollHeight;
+        });
+        box.scrollTop = box.scrollHeight; // Auto scroll to bottom
     });
 }
 
-// Sending Messages
-document.getElementById('btn-send').onclick = async () => {
-    const inp = document.getElementById('msg-input');
-    const val = inp.value.trim();
-    if (!val) return;
+// --- RIGHT SIDEBAR (MEMBERS) ---
+async function syncRightSidebar(chatId) {
+    const list = document.getElementById('member-list');
+    list.innerHTML = "<div style='padding:10px; color:gray;'>Loading...</div>";
+
+    // Get Chat Document to find member IDs
+    const chatSnap = await getDoc(doc(db, "conversations", chatId));
+    if (!chatSnap.exists()) return;
     
-    inp.value = "";
+    const memberIds = chatSnap.data().members || [];
+    list.innerHTML = ""; // Clear loading
+
+    // Fetch each user profile
+    memberIds.forEach(async (uid) => {
+        const uSnap = await getDoc(doc(db, "users", uid));
+        if (uSnap.exists()) {
+            const u = uSnap.data();
+            const div = document.createElement('div');
+            div.className = "member-item";
+            div.innerHTML = `
+                <div class="status-dot ${u.online ? 'online' : ''}"></div>
+                <div>
+                    <div>${u.username} ${u.admin ? '🛡️' : ''}</div>
+                </div>
+            `;
+            list.appendChild(div);
+        }
+    });
+}
+
+// --- SENDING MESSAGES ---
+document.getElementById('btn-send').onclick = async () => {
+    const input = document.getElementById('msg-input');
+    const txt = input.value.trim();
+    if (!txt || !activeChatId) return;
+
+    input.value = ""; // Clear input
+    
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-        content: val,
+        content: txt,
         senderId: currentUser.id,
+        senderName: currentUser.username, // Store name in msg for easier display
         timestamp: serverTimestamp()
     });
-    // Update lastUpdated for sorting
-    await updateDoc(doc(db, "conversations", activeChatId), { lastUpdated: serverTimestamp() });
 };
 
-// Creating Channels
-document.getElementById('btn-create').onclick = async () => {
-    const inp = document.getElementById('new-channel-name');
-    // Sanitize: only alphanumeric
-    const name = inp.value.trim().replace(/[^a-zA-Z0-9 ]/g, "");
-    
-    if (name.length < 3) return alert("Name too short.");
-    
-    // Check Duplicate
-    const q = query(collection(db, "conversations"), where("name", "==", name), limit(1));
-    const exists = await getDocs(q);
-    if (!exists.empty) return alert("Channel already exists!");
+// --- CREATING CHANNEL ---
+document.getElementById('btn-create-channel').onclick = async () => {
+    const name = document.getElementById('new-channel-input').value.trim();
+    if (name.length < 3) return alert("Name too short");
 
     await addDoc(collection(db, "conversations"), {
         name: name,
         type: 'channel',
         members: [currentUser.id],
         createdBy: currentUser.id,
-        lastUpdated: serverTimestamp()
+        createdAt: serverTimestamp()
     });
-    inp.value = "";
+    
+    document.getElementById('new-channel-input').value = "";
 };
 
-// Leave Room
-document.getElementById('btn-leave-room').onclick = async () => {
-    if(!confirm("Leave this channel?")) return;
+// --- SEARCH & ADD USERS ---
+let searchAction = null; // 'dm' or 'add'
+
+document.getElementById('btn-dm-add').onclick = () => {
+    searchAction = 'dm';
+    document.getElementById('search-modal').style.display = 'flex';
+};
+
+document.getElementById('btn-add-user').onclick = () => {
+    searchAction = 'add';
+    document.getElementById('search-modal').style.display = 'flex';
+};
+
+document.getElementById('search-input').oninput = async (e) => {
+    const val = e.target.value.toLowerCase();
+    const resDiv = document.getElementById('search-results');
+    resDiv.innerHTML = "";
+    if (val.length < 2) return;
+
+    // Search users by username_lower
+    const q = query(collection(db, "users"), where("username_lower", ">=", val), where("username_lower", "<=", val + '\uf8ff'), limit(5));
+    const snap = await getDocs(q);
+
+    snap.forEach(d => {
+        if (d.id === currentUser.id) return; // Don't show myself
+        const u = d.data();
+        const btn = document.createElement('div');
+        btn.style = "padding:10px; background:rgba(255,255,255,0.1); margin:5px; cursor:pointer;";
+        btn.innerHTML = `<b>${u.username}</b>`;
+        
+        btn.onclick = async () => {
+            if (searchAction === 'dm') {
+                // CREATE DM: ID is combination of both UIDs to ensure uniqueness
+                const dmId = [currentUser.id, d.id].sort().join("_");
+                
+                await setDoc(doc(db, "conversations", dmId), {
+                    type: 'dm',
+                    members: [currentUser.id, d.id],
+                    createdAt: serverTimestamp()
+                }, { merge: true }); // Merge prevents overwriting if exists
+                
+            } else if (searchAction === 'add') {
+                // ADD TO GROUP
+                await updateDoc(doc(db, "conversations", activeChatId), {
+                    members: arrayUnion(d.id)
+                });
+                // System message
+                await addDoc(collection(db, "conversations", activeChatId, "messages"), {
+                    content: `${u.username} was added to the room.`,
+                    senderId: 'system',
+                    timestamp: serverTimestamp()
+                });
+            }
+            document.getElementById('search-modal').style.display = 'none';
+        };
+        resDiv.appendChild(btn);
+    });
+};
+
+// --- LEAVE & ADMIN ---
+document.getElementById('btn-leave').onclick = async () => {
+    if (!confirm("Leave this channel?")) return;
     
     await updateDoc(doc(db, "conversations", activeChatId), {
         members: arrayRemove(currentUser.id)
     });
     
+    // System message
     await addDoc(collection(db, "conversations", activeChatId, "messages"), {
         content: `${currentUser.username} left the room.`,
-        senderId: "system",
+        senderId: 'system',
         timestamp: serverTimestamp()
     });
     
-    activeChatId = null;
-    document.getElementById('messages-box').innerHTML = "";
-    document.getElementById('input-area').style.display = "none";
-    document.getElementById('chat-actions').style.display = "none";
-    document.getElementById('chat-title').innerText = "Select a channel";
-    syncSidebar();
+    location.reload(); // Quick refresh to reset state
 };
 
-// Delete Room (Admin)
-document.getElementById('btn-delete-channel').onclick = async () => {
-    if(!confirm("DELETE entire room? Cannot be undone.")) return;
+document.getElementById('btn-admin-nuke').onclick = async () => {
+    if (!confirm("ADMIN: Delete this entire room permanently?")) return;
     await deleteDoc(doc(db, "conversations", activeChatId));
     location.reload();
-};
-
-// --- SEARCH & ADD USERS ---
-const searchModal = document.getElementById('search-modal');
-const searchInput = document.getElementById('search-user-input');
-const searchResults = document.getElementById('search-results');
-
-// Open Modals
-document.getElementById('header-add-user').onclick = () => {
-    isAddingMode = "channel";
-    document.getElementById('search-title').innerText = "Add User to Channel";
-    searchModal.style.display = 'flex';
-    searchInput.focus();
-};
-document.getElementById('open-dm-search').onclick = () => {
-    isAddingMode = "dm";
-    document.getElementById('search-title').innerText = "New Direct Message";
-    searchModal.style.display = 'flex';
-    searchInput.focus();
-};
-document.getElementById('close-search').onclick = () => {
-    searchModal.style.display = 'none';
-    searchInput.value = "";
-    searchResults.innerHTML = "";
-};
-
-// Search Logic
-searchInput.oninput = async () => {
-    const val = searchInput.value.trim().toLowerCase();
-    if (val.length < 2) return;
-
-    // Search by username_lower
-    const q = query(collection(db, "users"), where("username_lower", ">=", val), where("username_lower", "<=", val + '\uf8ff'), limit(5));
-    const snap = await getDocs(q);
-    
-    searchResults.innerHTML = "";
-    snap.forEach(d => {
-        if(d.id === currentUser.id) return; // Don't show self
-        
-        const u = d.data();
-        const div = document.createElement('div');
-        div.className = "search-item";
-        
-        const onlineStatus = u.online ? "online" : "";
-        
-        div.innerHTML = `
-            <div style="display:flex; align-items:center;">
-                <div class="status-dot ${onlineStatus}"></div>
-                <span>${u.username}</span>
-            </div>
-            <button class="action-btn-small">${isAddingMode === 'channel' ? 'Add' : 'Chat'}</button>
-        `;
-        
-        // Handle Click
-        div.querySelector('button').onclick = async () => {
-            if (isAddingMode === "channel") {
-                // Add to existing channel
-                await updateDoc(doc(db, "conversations", activeChatId), {
-                    members: arrayUnion(d.id)
-                });
-                await addDoc(collection(db, "conversations", activeChatId, "messages"), {
-                    content: `${u.username} was added.`,
-                    senderId: "system",
-                    timestamp: serverTimestamp()
-                });
-                alert("User added!");
-            } else {
-                // Create DM
-                const dmId = [currentUser.id, d.id].sort().join("_");
-                await setDoc(doc(db, "conversations", dmId), {
-                    type: 'dm',
-                    members: [currentUser.id, d.id],
-                    lastUpdated: serverTimestamp()
-                }, { merge: true }); // merge prevents overwriting existing DMs
-                
-                openChat(dmId, u.username, true);
-            }
-            searchModal.style.display = 'none';
-            searchInput.value = "";
-            searchResults.innerHTML = "";
-        };
-        searchResults.appendChild(div);
-    });
-};
-
-// --- ADMIN DASHBOARD ---
-document.getElementById('btn-admin-dash').onclick = () => document.getElementById('admin-overlay').style.display = 'flex';
-document.getElementById('close-admin').onclick = () => document.getElementById('admin-overlay').style.display = 'none';
-
-document.getElementById('admin-search-users').oninput = async (e) => {
-    const val = e.target.value.toLowerCase();
-    if(val.length < 2) return;
-    
-    const snap = await getDocs(query(collection(db, "users"), where("username_lower", ">=", val), where("username_lower", "<=", val + '\uf8ff'), limit(10)));
-    const res = document.getElementById('admin-user-results');
-    res.innerHTML = "";
-    
-    snap.forEach(d => {
-        const u = d.data();
-        const div = document.createElement('div');
-        div.style = "background:rgba(255,255,255,0.05); padding:10px; margin-bottom:5px; border-radius:8px; display:flex; justify-content:space-between; align-items:center;";
-        div.innerHTML = `
-            <span>${u.username} <small style="color:gray">${u.admin?'(Admin)':''}</small></span>
-            <div>
-                <button onclick="window.setRank('${d.id}', 'admin')" style="background:#8b5cf6; color:white; border:none; padding:4px; border-radius:4px; cursor:pointer;">Admin</button>
-                <button onclick="window.setRank('${d.id}', 'vip')" style="background:#f59e0b; color:white; border:none; padding:4px; border-radius:4px; cursor:pointer;">VIP</button>
-                <button onclick="window.setRank('${d.id}', 'member')" style="background:#10b981; color:white; border:none; padding:4px; border-radius:4px; cursor:pointer;">Member</button>
-            </div>
-        `;
-        res.appendChild(div);
-    });
-};
-
-// Global helpers for inline onclicks
-window.setRank = async (uid, rank) => {
-    const ref = doc(db, "users", uid);
-    if(rank === 'admin') await updateDoc(ref, {admin:true, vip:false});
-    else if(rank === 'vip') await updateDoc(ref, {admin:false, vip:true});
-    else await updateDoc(ref, {admin:false, vip:false});
-    alert(`User set to ${rank}`);
-};
-
-window.delMsg = async (msgId) => {
-    if(confirm("Delete message?")) {
-        await deleteDoc(doc(db, "conversations", activeChatId, "messages", msgId));
-    }
 };
