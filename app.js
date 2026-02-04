@@ -18,6 +18,7 @@ const db = getFirestore(app);
 let currentUser = null;
 let activeChatId = null;
 let msgUnsub = null;
+let chatUnsub = null;
 
 onAuthStateChanged(auth, async (user) => {
     if (user) {
@@ -35,24 +36,42 @@ function loadChannels() {
         list.innerHTML = "";
         snap.forEach(d => {
             const item = document.createElement('div');
+            item.className = "chat-item";
             item.style = `padding:12px; cursor:pointer; ${activeChatId === d.id ? 'background:#404249;' : ''}`;
-            item.innerText = "# " + d.data().name;
-            item.onclick = () => openChat(d.id, d.data().name, d.data().members);
+            item.innerText = (d.id === "announcements" ? "📢 " : "# ") + d.data().name;
+            item.onclick = () => openChat(d.id, d.data().name);
             list.appendChild(item);
         });
     });
 }
 
-async function openChat(id, name, members) {
+async function openChat(id, name) {
     if (msgUnsub) msgUnsub();
+    if (chatUnsub) chatUnsub();
     activeChatId = id;
-    document.getElementById('chat-title').innerText = "# " + name;
-    
-    // MOBILE FIX: Auto-close sidebar when chat opens
-    document.getElementById('sidebar-left').classList.add('collapsed');
-    document.getElementById('sidebar-left').classList.remove('open');
 
-    loadMembers(members);
+    document.getElementById('chat-title').innerText = (id === "announcements" ? "📢 " : "# ") + name;
+
+    // UI RESTRICTION FOR ANNOUNCEMENTS
+    const userSnap = await getDoc(doc(db, "users", currentUser.uid));
+    const isAdmin = userSnap.data()?.role === "admin";
+    const inputArea = document.getElementById('message-input-container'); // Wrap your input/button in this ID
+    
+    if (id === "announcements" && !isAdmin) {
+        inputArea.style.opacity = "0.5";
+        document.getElementById('msg-input').placeholder = "Only admins can post here";
+        document.getElementById('msg-input').disabled = true;
+        document.getElementById('btn-send').style.pointerEvents = "none";
+    } else {
+        inputArea.style.opacity = "1";
+        document.getElementById('msg-input').placeholder = "Type a message...";
+        document.getElementById('msg-input').disabled = false;
+        document.getElementById('btn-send').style.pointerEvents = "auto";
+    }
+
+    chatUnsub = onSnapshot(doc(db, "conversations", id), (snap) => {
+        if (snap.exists()) loadMembers(snap.data().members);
+    });
 
     const q = query(collection(db, "conversations", id, "messages"), orderBy("timestamp", "asc"));
     msgUnsub = onSnapshot(q, (snap) => {
@@ -71,38 +90,33 @@ async function openChat(id, name, members) {
 
 async function loadMembers(memberIds) {
     const list = document.getElementById('member-list');
-    if (!list) return; // Guard for mobile where list is hidden
+    if (!list) return;
     list.innerHTML = "";
-    
     for (const uid of memberIds) {
         const snap = await getDoc(doc(db, "users", uid));
         if (snap.exists()) {
             const div = document.createElement('div');
             div.className = "member-item";
-            div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${snap.data().username}`;
+            div.innerHTML = `<div style="width:10px;height:10px;background:#23a55a;border-radius:50%"></div> ${snap.data().username} ${snap.data().role === 'admin' ? '👑' : ''}`;
             list.appendChild(div);
         }
     }
 }
 
-// TOGGLE SIDEBAR (Works for Phone and Desktop)
-document.getElementById('btn-toggle-menu').onclick = () => {
-    const side = document.getElementById('sidebar-left');
-    if (window.innerWidth <= 768) {
-        side.classList.toggle('open');
-    } else {
-        side.classList.toggle('collapsed');
-    }
-};
-
-document.getElementById('btn-add-user').onclick = async () => {
-    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
-    if (!name || !activeChatId) return;
-    const snap = await getDoc(doc(db, "usernames", name));
-    if (snap.exists()) {
-        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
-        alert("User added!");
-    }
+// SIGNUP WITH AUTO-JOIN
+document.getElementById('btn-signup').onclick = async () => {
+    const u = document.getElementById('username').value.toLowerCase().trim();
+    const p = document.getElementById('password').value;
+    try {
+        const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
+        await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
+        await setDoc(doc(db, "users", res.user.uid), { username: u, role: "user" });
+        
+        // Auto-join the fixed ID "announcements"
+        await updateDoc(doc(db, "conversations", "announcements"), {
+            members: arrayUnion(res.user.uid)
+        });
+    } catch (e) { alert(e.message); }
 };
 
 document.getElementById('btn-send').onclick = async () => {
@@ -114,21 +128,24 @@ document.getElementById('btn-send').onclick = async () => {
     input.value = "";
 };
 
+// Login and other existing functions...
 document.getElementById('btn-login').onclick = () => {
     const u = document.getElementById('username').value.trim().toLowerCase() + "@salmon.com";
     const p = document.getElementById('password').value;
     signInWithEmailAndPassword(auth, u, p);
 };
 
-document.getElementById('btn-signup').onclick = async () => {
-    const u = document.getElementById('username').value.toLowerCase().trim();
-    const p = document.getElementById('password').value;
-    const res = await createUserWithEmailAndPassword(auth, u + "@salmon.com", p);
-    await setDoc(doc(db, "usernames", u), { uid: res.user.uid });
-    await setDoc(doc(db, "users", res.user.uid), { username: u });
-};
-
 document.getElementById('btn-create-channel').onclick = () => {
     const n = document.getElementById('group-name').value.trim();
     if (n) addDoc(collection(db, "conversations"), { name: n, members: [currentUser.uid] });
+};
+
+document.getElementById('btn-add-user').onclick = async () => {
+    const name = document.getElementById('add-user-input').value.toLowerCase().trim();
+    if (!name || !activeChatId) return;
+    const snap = await getDoc(doc(db, "usernames", name));
+    if (snap.exists()) {
+        await updateDoc(doc(db, "conversations", activeChatId), { members: arrayUnion(snap.data().uid) });
+        alert("User added!");
+    }
 };
